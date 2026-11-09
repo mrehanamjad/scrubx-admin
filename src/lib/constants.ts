@@ -16,6 +16,7 @@ export const COLOR_LIBRARY: ProductColor[] = [
 ];
 
 export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
+  pending: "Pending (COD)",
   awaiting_payment: "Awaiting Payment",
   payment_submitted: "Payment Submitted",
   pending_cod: "Pending (COD)",

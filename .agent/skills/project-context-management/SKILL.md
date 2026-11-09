@@ -138,6 +138,7 @@ Every entry appended to [`IMPLEMENTATION_LOG.md`](file:///home/rehan/Downloads/s
 4. **Credential Security:** Never commit real secrets, API keys, database passwords, or JWT secrets to any documentation file. Always use placeholders (e.g. `[YOUR-PASSWORD]`, `******`).
 5. **Targeted In-Place Editing:** Edit specific sections of existing documentation instead of deleting and recreating entire files.
 6. **Code is King:** If code and documentation ever disagree, verify the code behavior, update the documentation to match reality, and notify the user.
+7. **Documentation Freshness:** Any agent that completes a remediation phase or issue must keep the domain docs updated (`DATABASE_CONTEXT.md`, `AUTH_CONTEXT.md`, `IMAGEKIT_CONTEXT.md`, `ARCHITECTURE.md`). Documentation that contradicts source code is a defect, not intent. Never leave stale statements about decommissioned stores or planned features that are already implemented.
 
 ---
 

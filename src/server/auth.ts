@@ -6,6 +6,7 @@ export type { AdminRole };
 
 export interface AdminContext {
   id: string;
+  userId?: string;
   email: string;
   name: string;
   role: AdminRole;
@@ -66,12 +67,18 @@ export async function getCurrentAdmin(): Promise<AdminContext> {
     );
   }
 
-  const rawRole = (user.role as AdminRole) || "staff";
-  const validRoles: AdminRole[] = ["super_admin", "admin", "staff"];
-  const role: AdminRole = validRoles.includes(rawRole) ? rawRole : "staff";
+  const ROLE_SET = new Set<AdminRole>(["super_admin", "admin", "staff"]);
+  const rawRole = typeof user.role === "string" ? user.role.trim() : "";
+  if (!ROLE_SET.has(rawRole as AdminRole)) {
+    throw new AuthorizationError(
+      "Your account does not have administrative access. Contact a Super Administrator."
+    );
+  }
+  const role = rawRole as AdminRole;
 
   return {
     id: user.id,
+    userId: user.id,
     email: user.email,
     name: user.name,
     role,
@@ -114,7 +121,10 @@ export async function requireStaffContext(options: StaffContextOptions = { redir
     }
     if (options.redirect) {
       const { redirect } = await import("next/navigation");
-      redirect("/login");
+      if (err instanceof AuthorizationError) {
+        redirect("/login?error=forbidden");
+      }
+      redirect("/login?error=session");
     }
     throw err;
   }
@@ -134,7 +144,10 @@ export async function requireAdminContext(options: StaffContextOptions = { redir
     }
     if (options.redirect) {
       const { redirect } = await import("next/navigation");
-      redirect("/login?error=forbidden");
+      if (err instanceof AuthorizationError) {
+        redirect("/login?error=forbidden");
+      }
+      redirect("/login?error=session");
     }
     throw err;
   }
@@ -154,8 +167,37 @@ export async function requireSuperAdminContext(options: StaffContextOptions = { 
     }
     if (options.redirect) {
       const { redirect } = await import("next/navigation");
+      if (err instanceof AuthorizationError) {
+        redirect("/login?error=forbidden");
+      }
+      redirect("/login?error=session");
+    }
+    throw err;
+  }
+}
+
+/**
+ * Convenience helper for React Server Component pages.
+ * Enforces the required minimum administrative role and performs clean error redirects.
+ */
+export async function requirePage(role: AdminRole = "staff"): Promise<AdminContext> {
+  const { redirect } = await import("next/navigation");
+  try {
+    if (role === "super_admin") {
+      return await requireSuperAdminContext({ redirect: false });
+    }
+    if (role === "admin") {
+      return await requireAdminContext({ redirect: false });
+    }
+    return await requireStaffContext({ redirect: false });
+  } catch (err) {
+    if (err && typeof err === "object" && "digest" in err && String((err as any).digest).startsWith("NEXT_REDIRECT")) {
+      throw err;
+    }
+    if (err instanceof AuthorizationError) {
       redirect("/login?error=forbidden");
     }
+    redirect("/login?error=session");
     throw err;
   }
 }

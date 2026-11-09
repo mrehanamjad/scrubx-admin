@@ -70,6 +70,7 @@ export interface Category {
 }
 
 export type OrderStatus =
+  | "pending"
   | "awaiting_payment"
   | "payment_submitted"
   | "pending_cod"
@@ -118,6 +119,7 @@ export interface OrderItem {
   price: number;
   quantity: number;
   engraving?: EngravingDetail;
+  engravings?: EngravingDetail[];
 }
 
 export interface Address {
@@ -150,6 +152,7 @@ export interface Order {
   customerType: "registered" | "guest";
   date: string;
   items: OrderItem[];
+  itemsCount?: number;
   subtotal: number;
   engravingCharges: number;
   discount: number;
@@ -168,6 +171,7 @@ export interface Order {
   verifiedByName?: string;
   rejectionReason?: string;
   transactionRef?: string;
+  paymentDueAt?: string;
   couponCode?: string;
   shippingAddress: Address;
   billingAddress?: Address;
@@ -187,7 +191,10 @@ export interface Customer {
   type: "registered" | "guest";
   registeredAt: string;
   addresses: Address[];
-  notes: { id: ID; text: string; at: string }[];
+  notes: { id: ID; text: string; at: string; authorName?: string; isPinned?: boolean }[];
+  ordersCount?: number;
+  totalSpend?: number;
+  lastOrderDate?: string | null;
 }
 
 export interface Coupon {
@@ -204,7 +211,7 @@ export interface Coupon {
   startsAt: string;
   expiresAt: string;
   usedCount: number;
-  status: "active" | "inactive" | "expired";
+  status: "active" | "inactive" | "expired" | "scheduled";
 }
 
 export interface PaymentMethod {
@@ -237,6 +244,8 @@ export interface PaymentSubmission {
   status: "submitted" | "approved" | "rejected";
   rejectionReason?: string;
   reviewedAt?: string;
+  isDuplicate?: boolean;
+  duplicateRefDetails?: { paymentId?: string; orderId?: string };
 }
 
 export interface EngravingOption {

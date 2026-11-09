@@ -76,9 +76,7 @@ export const orders = pgTable(
   (table) => [
     index("idx_orders_customer_id").on(table.customerId),
     index("idx_orders_status_placed_at").on(table.status, table.placedAt.desc()),
-    uniqueIndex("uq_orders_idempotency_key")
-      .on(table.idempotencyKey)
-      .where(sql`${table.idempotencyKey} IS NOT NULL`),
+    uniqueIndex("orders_idempotency_key_key").on(table.idempotencyKey),
     check("chk_orders_currency", sql`length(${table.currency}) = 3`),
     check("chk_orders_subtotal", sql`${table.subtotal} >= 0`),
     check("chk_orders_engraving_total", sql`${table.engravingTotal} >= 0`),
@@ -161,11 +159,18 @@ export const orderCoupons = pgTable(
       .notNull()
       .references(() => coupons.id, { onDelete: "restrict" }),
     discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    releaseReason: text("release_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.orderId, table.couponId] }),
     check("chk_order_coupons_discount", sql`${table.discountAmount} >= 0`),
+    check(
+      "chk_order_coupons_release_reason",
+      sql`${table.releaseReason} IS NULL OR ${table.releaseReason} IN ('order_cancelled', 'order_refunded', 'admin_correction')`
+    ),
+    index("idx_order_coupons_coupon_released").on(table.couponId, table.releasedAt),
   ]
 );
 
@@ -205,4 +210,65 @@ export const orderStatusHistory = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_order_status_history_order").on(table.orderId)]
+);
+
+/**
+ * Order Returns & RMAs (ECOM-002, ECOM-003)
+ */
+export const orderReturns = pgTable(
+  "order_returns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "restrict" }),
+    replacementOrderId: uuid("replacement_order_id").references(() => orders.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull().default("requested"),
+    reason: text("reason").notNull(),
+    requestedBy: text("requested_by").references(() => baUser.id, {
+      onDelete: "set null",
+    }),
+    approvedBy: text("approved_by").references(() => baUser.id, {
+      onDelete: "set null",
+    }),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    refundAmount: numeric("refund_amount", { precision: 12, scale: 2 }),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_order_returns_order_id").on(table.orderId),
+    index("idx_order_returns_status").on(table.status),
+    check(
+      "chk_order_returns_status",
+      sql`${table.status} IN ('requested', 'approved', 'received', 'restocked', 'rejected', 'completed')`
+    ),
+    check(
+      "chk_order_returns_refund_amount",
+      sql`${table.refundAmount} IS NULL OR ${table.refundAmount} > 0`
+    ),
+  ]
+);
+
+export const orderReturnItems = pgTable(
+  "order_return_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    returnId: uuid("return_id")
+      .notNull()
+      .references(() => orderReturns.id, { onDelete: "cascade" }),
+    orderItemId: uuid("order_item_id")
+      .notNull()
+      .references(() => orderItems.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    restock: boolean("restock").notNull().default(true),
+  },
+  (table) => [
+    index("idx_order_return_items_return_id").on(table.returnId),
+    check("chk_order_return_items_quantity", sql`${table.quantity} > 0`),
+    unique("uq_order_return_item").on(table.returnId, table.orderItemId),
+  ]
 );

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
+import { safeInternalPath } from "@/lib/safe-redirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +14,7 @@ import { Eye, EyeOff, Lock, Mail, AlertCircle, ShieldCheck } from "lucide-react"
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get("from") || "/";
+  const from = safeInternalPath(searchParams.get("from"));
   const errorParam = searchParams.get("error");
 
   const [email, setEmail] = useState("");
@@ -25,7 +26,9 @@ export default function LoginPage() {
       ? "This account has been suspended by an administrator."
       : errorParam === "forbidden"
         ? "Access denied. Your account role does not have permission to view that resource."
-        : ""
+        : errorParam === "session"
+          ? "Your session has expired or is invalid. Please sign in again."
+          : ""
   );
 
   async function handleLogin(e: React.FormEvent) {
@@ -51,8 +54,8 @@ export default function LoginPage() {
       router.push(from);
       router.refresh();
     } catch (err: unknown) {
-      const error = err as Error;
-      setErrorMessage(error.message || "An unexpected authentication error occurred.");
+      console.error("[Login Exception]:", err);
+      setErrorMessage("An unexpected authentication error occurred. Please try again.");
       setLoading(false);
     }
   }

@@ -10,33 +10,33 @@
 ```mermaid
 flowchart TD
     subgraph Browser ["Client Boundary (Browser)"]
-        UI["17 Views (src/views/*.tsx)"]
+        UI["18 Views (src/views/*.tsx)"]
         Nav["Sidebar & Topbar (src/components/layout/)"]
         ClientAuth["authClient (src/lib/auth-client.ts)"]
-        LegacyStore["Legacy StoreContext (src/data/store.tsx)"]
         ImageUploader["ImageUpload Component (src/components/shared/image-upload.tsx)"]
         
-        UI <--> LegacyStore
-        Nav <--> LegacyStore
         Nav -->|"useSession / signOut"| ClientAuth
         UI -->|"signIn.email"| ClientAuth
         UI --> ImageUploader
+        UI -->|"Server Action Mutations"| ServerActions
     end
 
     subgraph Edge ["Next.js 16 Edge / Routing Layer"]
-        Middleware["src/middleware.ts"]
-        Middleware -->|"No Session Cookie"| RedirectLogin["307 Redirect to /login?from=..."]
-        Middleware -->|"Active Cookie on /login"| RedirectDashboard["307 Redirect to /"]
-        Middleware -->|"Valid Cookie"| AppRouter["App Router (src/app/**/page.tsx)"]
+        Proxy["Next.js 16 Proxy (src/proxy.ts)"]
+        Proxy -->|"No Session Cookie"| RedirectLogin["307 Redirect to /login?from=..."]
+        Proxy -->|"Active Cookie on /login"| RedirectDashboard["307 Redirect to /"]
+        Proxy -->|"Valid Cookie"| AppRouter["App Router (src/app/**/page.tsx)"]
     end
 
     subgraph Server ["Server Boundary (Node.js RSC, Server Actions & Handlers)"]
         Pages["Page Containers (React Server Components)"]
         AuthHandler["Auth Handler (src/app/api/auth/[...all]/route.ts)"]
         UploadAuth["Upload Auth Handler (src/app/api/upload/auth/route.ts)"]
-        AuthGuards["Auth Guards (src/lib/auth-guard.ts)"]
+        ServerAuth["Single Auth Stack (src/server/auth.ts)"]
         BetterAuthServer["Better Auth Server (src/lib/auth.ts)"]
-        MediaActions["Media Actions (src/actions/media.ts)"]
+        ServerActions["Server Actions (src/actions/*.ts)"]
+        DomainServices["Domain Services (src/server/services/*.ts)"]
+        Repositories["Repositories (src/server/repositories/*.ts)"]
         ImageKitSDK["ImageKit Node SDK Singleton (src/lib/imagekit.ts)"]
         
         AppRouter --> Pages
@@ -221,7 +221,7 @@ scrubx-admin/
   }
   ```
 - **Client Leaf Views:** The view components in `src/views/` are marked `'use client'` to support interactive modals, form inputs, local state filters, and tab navigation.
-- **Transitional State Pattern:** Views currently read and write to `useStore()` backed by `src/data/mock.ts` and `localStorage`. During Phase 5 and 6, view data will be supplied as server-fetched props from `page.tsx`, and mutations will invoke Server Actions.
+- **Production Architecture:** All 18 views receive strongly-typed initial data as server-fetched DTO props directly from Server Component `page.tsx` containers (calling backend domain services and repositories). Mutations are dispatched through typed Next.js Server Actions wrapped by `createSafeAction`.
 - **Navigation Shell:** `AppShell` provides a responsive desktop sidebar and mobile sliding drawer. It automatically inspects `usePathname()` and bypasses the navigation frame for `/login`.
 
 ---
@@ -390,4 +390,36 @@ scrubx-admin/
   - All admin mutations are exposed through Server Actions wrapped by `createSafeAction`.
   - Data loading in React Server Components consumes backend services/repositories directly in Node.js runtime.
   - Zero internal REST Route Handlers and zero read Server Actions.
+
+---
+
+## 11. CI/CD Pipeline, Branch Protection & Automated Testing Architecture (ARCH-009, TEST-001–007)
+
+### Continuous Integration Pipeline (`.github/workflows/ci.yml`)
+Every push and pull request to the `main` branch runs an automated multi-job pipeline on GitHub Actions:
+1. **`install-and-verify`**:
+   - `npm ci`
+   - `npx tsc --noEmit` (strict TypeScript check, zero errors)
+   - `npm run lint` (ESLint 9 + static regression guards via `scripts/check-guards.mjs`)
+   - `npm run build` (Next.js 16 App Router production build with Turbopack)
+2. **`audit`**:
+   - `npm audit --audit-level=high`
+3. **`schema-parity`**:
+   - Ephemeral PostgreSQL 17 service container.
+   - Runs `npm run db:migrate` followed by `npm run db:parity` (verifying all 31 tables, columns, indexes, enums, triggers, RLS, and foreign keys).
+4. **`test`**:
+   - Runs complete Vitest test harness (`npm test`) covering pure logic, declarative authorization matrix, DTO snapshots, security assertions, and concurrency invariants.
+
+### Required Repository Branch Protection Rules (Manual GitHub Configuration)
+For repository administrators, the following branch protection rules must be configured on the `main` branch:
+- **Require a pull request before merging** (minimum 1 approving review).
+- **Require status checks to pass before merging**:
+  - `Typecheck, Lint & Build`
+  - `Dependency Audit`
+  - `PostgreSQL Schema Parity & Migrations`
+  - `Automated Unit & Concurrency Test Harness`
+- **Require branches to be up to date before merging** (strict linear history).
+- **Do not allow bypassing the above settings**.
+- **Include administrators in protection enforcement**.
+
 

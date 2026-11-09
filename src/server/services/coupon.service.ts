@@ -310,6 +310,19 @@ export class CouponService {
       discountAmount,
     };
   }
+
+  /**
+   * Releases an order's coupon redemption on order cancellation or refund (BUG-007, DB-007).
+   * Atomically decrements usageCount and updates the order_coupons entry with releaseReason.
+   * Idempotent: safe to invoke multiple times.
+   */
+  async releaseOrderRedemption(
+    orderId: string,
+    tx: DatabaseExecutor,
+    reason: "order_cancelled" | "order_refunded" | "admin_correction" = "order_cancelled"
+  ): Promise<boolean> {
+    return this.repo.releaseRedemption(orderId, tx, reason);
+  }
 }
 
 export const couponService = new CouponService();

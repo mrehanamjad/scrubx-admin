@@ -147,14 +147,14 @@ export default function CategoriesPage({
   const handleSave = async (category: Category) => {
     setIsSubmitting(true);
     const isExisting = categories.some((c) => c.id === category.id);
-    const generatedSlug = slugify(category.name) || category.slug;
+    const finalSlug = (category.slug?.trim() ? slugify(category.slug.trim()) : slugify(category.name)).slice(0, 80);
 
     try {
       if (isExisting) {
         const res = await updateCategoryAction({
           id: category.id,
           name: category.name,
-          slug: generatedSlug,
+          slug: finalSlug,
           parentId: category.parentId || null,
           description: category.description || null,
           imageUrl: category.image || null,
@@ -180,7 +180,7 @@ export default function CategoriesPage({
       } else {
         const res = await createCategoryAction({
           name: category.name,
-          slug: generatedSlug,
+          slug: finalSlug,
           parentId: category.parentId || null,
           description: category.description || null,
           imageUrl: category.image || null,

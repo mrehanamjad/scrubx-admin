@@ -305,6 +305,43 @@ async function verifySchemaParity() {
         : "Constraint ba_user_role_check not found",
     });
 
+    // DB-004: Verify inventory movements and shipping check constraints
+    const movementsReasonConstraint = checkConstraints.find(
+      (c) => c.constraint_name === "chk_inventory_movements_reason"
+    );
+    results.push({
+      category: "Check Constraints",
+      item: "Inventory Movements Reason Check (DB-004)",
+      passed: Boolean(movementsReasonConstraint),
+      details: movementsReasonConstraint
+        ? `chk_inventory_movements_reason definition: ${movementsReasonConstraint.definition}`
+        : "Constraint chk_inventory_movements_reason not found",
+    });
+
+    const shippingDaysConstraint = checkConstraints.find(
+      (c) => c.constraint_name === "chk_shipping_methods_days"
+    );
+    results.push({
+      category: "Check Constraints",
+      item: "Shipping Methods Days Range Check (DB-004)",
+      passed: Boolean(shippingDaysConstraint),
+      details: shippingDaysConstraint
+        ? `chk_shipping_methods_days definition: ${shippingDaysConstraint.definition}`
+        : "Constraint chk_shipping_methods_days not found",
+    });
+
+    const couponsUpperConstraint = checkConstraints.find(
+      (c) => c.constraint_name === "chk_coupons_code_upper"
+    );
+    results.push({
+      category: "Check Constraints",
+      item: "Coupons Uppercase Code Check (DB-003)",
+      passed: Boolean(couponsUpperConstraint),
+      details: couponsUpperConstraint
+        ? `chk_coupons_code_upper definition: ${couponsUpperConstraint.definition}`
+        : "Constraint chk_coupons_code_upper not found",
+    });
+
     // ------------------------------------------------------------------------
     // 7. VERIFY PERFORMANCE INDEXES
     // ------------------------------------------------------------------------
@@ -324,7 +361,7 @@ async function verifySchemaParity() {
       "idx_product_images_lookup",
       "idx_inventory_movements_variant",
       "idx_addresses_customer_id",
-      "idx_coupons_code",
+      "uq_coupons_code_upper",
       "idx_orders_customer_id",
       "idx_orders_status_placed_at",
       "idx_order_items_order_id",
@@ -335,6 +372,13 @@ async function verifySchemaParity() {
       "idx_payments_status",
       "idx_ba_session_user_id",
       "idx_ba_account_user_id",
+      // Hot path indexes (DB-006)
+      "idx_payments_order_created",
+      "idx_payments_status_created",
+      "idx_inventory_movements_created",
+      "idx_inventory_movements_variant_created",
+      "idx_variants_product_price",
+      "idx_inventory_updated",
     ];
 
     const missingIndexes = expectedIndexNames.filter(

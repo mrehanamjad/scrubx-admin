@@ -75,12 +75,19 @@ interface InventoryProps {
     reserved: number;
     skus: number;
   };
+  initialPagination?: {
+    totalItems: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  };
 }
 
 export default function InventoryPage({
   initialRows = [],
   initialMovements = [],
   initialTotals,
+  initialPagination,
 }: InventoryProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -392,13 +399,21 @@ export default function InventoryPage({
                     </TableBody>
                   </Table>
                   <Pagination
-                    page={safePage}
-                    pageSize={pageSize}
-                    total={filtered.length}
-                    onPageChange={setPage}
+                    page={initialPagination ? initialPagination.currentPage : safePage}
+                    pageSize={initialPagination ? initialPagination.limit : pageSize}
+                    total={initialPagination ? initialPagination.totalItems : filtered.length}
+                    onPageChange={(newPage) => {
+                      setPage(newPage);
+                      if (initialPagination) {
+                        router.push(`?page=${newPage}&limit=${pageSize}`);
+                      }
+                    }}
                     onPageSizeChange={(s) => {
                       setPageSize(s);
                       setPage(1);
+                      if (initialPagination) {
+                        router.push(`?page=1&limit=${s}`);
+                      }
                     }}
                   />
                 </>

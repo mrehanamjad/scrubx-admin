@@ -54,3 +54,29 @@ export const deleteCustomerAddressSchema = z.object({
 });
 
 export type DeleteCustomerAddressInput = z.infer<typeof deleteCustomerAddressSchema>;
+
+/**
+ * Customer Note Management Schema
+ */
+export const addCustomerNoteSchema = z.object({
+  customerId: uuidSchema,
+  body: z.string().trim().min(1, "Note body cannot be empty.").max(2000, "Note exceeds 2,000 characters."),
+  isPinned: z.boolean().optional().default(false),
+});
+
+export type AddCustomerNoteInput = z.infer<typeof addCustomerNoteSchema>;
+
+export const deleteCustomerNoteSchema = z.object({
+  id: uuidSchema,
+  customerId: uuidSchema,
+});
+
+export type DeleteCustomerNoteInput = z.infer<typeof deleteCustomerNoteSchema>;
+
+export const getCustomerActivityFeedSchema = z.object({
+  customerId: uuidSchema,
+  limit: z.number().int().min(1).max(100).optional().default(50),
+  before: z.string().datetime().optional(),
+});
+
+export type GetCustomerActivityFeedInput = z.infer<typeof getCustomerActivityFeedSchema>;

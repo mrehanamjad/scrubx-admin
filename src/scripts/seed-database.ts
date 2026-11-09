@@ -549,7 +549,7 @@ async function seedDatabase() {
       amount: "5300.00",
       status: "paid",
       transactionReference: "TRX-MEZN-883921",
-      proofUrl: "/proofs/receipt-1.jpg",
+      proofUrl: null,
       paidAt: now,
     });
 
@@ -606,7 +606,7 @@ async function seedDatabase() {
       amount: "5200.00",
       status: "awaiting_verification",
       transactionReference: "TRX-JAZZ-192837",
-      proofUrl: "/proofs/receipt-1.jpg",
+      proofUrl: null,
     });
   }
 

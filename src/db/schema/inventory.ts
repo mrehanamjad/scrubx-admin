@@ -34,6 +34,7 @@ export const inventory = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    index("idx_inventory_updated").on(table.updatedAt.desc()),
     check("chk_inventory_on_hand", sql`${table.quantityOnHand} >= 0`),
     check(
       "chk_inventory_reserved",
@@ -60,9 +61,11 @@ export const inventoryMovements = pgTable(
   },
   (table) => [
     index("idx_inventory_movements_variant").on(table.variantId),
+    index("idx_inventory_movements_created").on(table.createdAt.desc()),
+    index("idx_inventory_movements_variant_created").on(table.variantId, table.createdAt.desc()),
     check(
       "chk_inventory_movements_reason",
-      sql`${table.reason} IN ('restock', 'sale', 'cancellation', 'adjustment', 'return')`
+      sql`${table.reason} IN ('restock', 'sale', 'cancellation', 'adjustment', 'return', 'correction')`
     ),
   ]
 );

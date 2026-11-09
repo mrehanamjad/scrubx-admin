@@ -9,8 +9,10 @@ export async function proxy(request: NextRequest) {
 
   // If visiting /login:
   if (pathname === "/login") {
-    // Authenticated users are redirected away from login to dashboard
-    if (sessionCookie) {
+    // Authenticated users are redirected away from login to dashboard,
+    // UNLESS arriving with an error query parameter (e.g. ?error=forbidden, ?error=session, ?error=banned)
+    // to prevent infinite redirect loops on stale/invalid sessions (BUG-032).
+    if (sessionCookie && !request.nextUrl.searchParams.has("error")) {
       return NextResponse.redirect(new URL("/", request.url));
     }
     return NextResponse.next();
@@ -18,6 +20,14 @@ export async function proxy(request: NextRequest) {
 
   // All other dashboard routes require active session authentication
   if (!sessionCookie) {
+    // API routes return 401 JSON instead of redirecting to HTML login page (SEC-011)
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "Unauthorized. Active session required." },
+        { status: 401 }
+      );
+    }
+
     const loginUrl = new URL("/login", request.url);
     if (pathname !== "/") {
       loginUrl.searchParams.set("from", pathname);
@@ -30,15 +40,20 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except:
-     * - api/auth (Better Auth handler endpoints)
-     * - _next/static (static JS/CSS assets)
-     * - _next/image (image optimization files)
-     * - favicon.ico, favicon.svg
-     * - public asset directories (brand/, proofs/)
-     * - static image file formats (.svg, .png, .jpg, .jpeg, .gif, .webp, .ico)
-     */
-    "/((?!api/auth|_next/static|_next/image|favicon\\.ico|favicon\\.svg|brand/|proofs/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/",
+    "/login",
+    "/products/:path*",
+    "/categories/:path*",
+    "/inventory/:path*",
+    "/orders/:path*",
+    "/payments/:path*",
+    "/customers/:path*",
+    "/coupons/:path*",
+    "/shipping/:path*",
+    "/payment-methods/:path*",
+    "/engraving/:path*",
+    "/settings/:path*",
+    "/staff/:path*",
+    "/api/upload/:path*",
   ],
 };

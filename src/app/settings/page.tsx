@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import SettingsPage from "@/views/Settings";
 import { settingsService } from "@/server/services/settings.service";
 import { shippingService } from "@/server/services/shipping.service";
-import { requireStaffContext } from "@/server/auth";
+import { requireSuperAdminContext } from "@/server/auth";
 import { db } from "@/db";
 import { products, customers, orders } from "@/db/schema";
 import { sql } from "drizzle-orm";
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 };
 
 export default async function Page() {
-  const admin = await requireStaffContext();
+  const admin = await requireSuperAdminContext();
 
   let initialSettings = {
     storeName: "ScrubX Pakistan",

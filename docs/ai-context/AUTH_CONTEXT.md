@@ -64,17 +64,23 @@ const superAdminSession = await requireSuperAdmin();
 
 ### C. Role Hierarchy
 ```typescript
-export type AdminRole = "SUPER_ADMIN" | "ADMIN" | "STAFF";
+export type AdminRole = "super_admin" | "admin" | "staff";
 
-const ROLE_HIERARCHY: Record<AdminRole, number> = {
-  SUPER_ADMIN: 3,
-  ADMIN: 2,
-  STAFF: 1,
+export const ROLE_HIERARCHY: Record<AdminRole, number> = {
+  super_admin: 3,
+  admin: 2,
+  staff: 1,
 };
 ```
-- `SUPER_ADMIN`: Full store access + staff management + store settings.
-- `ADMIN`: Catalog, orders, inventory, customers, payment verification, coupons.
-- `STAFF`: Read-only access to catalog and orders; order status updates.
+
+### Authorization Capability Matrix
+- `super_admin`: Store settings configuration mutations (`/settings`), staff management, irreversible system deletions.
+- `admin`: Catalog mutations (products, categories), order processing, payment verification/refunds, inventory adjustments, coupons, shipping methods, engraving options.
+- `staff`: Read-only access to catalog, inventory, orders, customers, payments; order notes and initial proof submissions.
+
+> [!IMPORTANT]
+> **Strict Role Resolution (SEC-004 & ADR 008):**
+> Unrecognized, missing, or storefront customer roles (`customer`, `NULL`, etc.) are strictly rejected with an `AuthorizationError` and redirected to `/login?error=forbidden`. Roles are never coerced or defaulted to `staff`.
 
 ---
 
@@ -83,16 +89,17 @@ const ROLE_HIERARCHY: Record<AdminRole, number> = {
 Because public registration is disabled, admin accounts are created via server script:
 
 ```bash
-# Provision default admin (admin@scrubx.pk / Admin@ScrubX2026!)
-npm run auth:seed-admin
-
-# Provision custom admin account
-ADMIN_EMAIL="manager@scrubx.pk" \
-ADMIN_NAME="Store Manager" \
-ADMIN_PASSWORD="CustomSecurePassword123!" \
-ADMIN_ROLE="ADMIN" \
+# Provision admin account (ADMIN_PASSWORD is required, min 12 chars)
+ADMIN_EMAIL="admin@scrubx.pk" \
+ADMIN_NAME="Ayesha Rehman" \
+ADMIN_PASSWORD="SecurePassphraseMin12Chars" \
+ADMIN_ROLE="super_admin" \
 npm run auth:seed-admin
 ```
+
+> [!CAUTION]
+> **Admin Password Rotation Required:**
+> Any environment provisioned prior to remediation with the legacy hardcoded password fallback must immediately rotate the admin password (`npm run auth:seed-admin` with a fresh `ADMIN_PASSWORD`), as the legacy default was publicly committed to git.
 The script uses `hashPassword` from `better-auth/crypto` (scrypt/argon2 algorithm) and creates records in `ba_user` and `ba_account`.
 
 ---
@@ -100,7 +107,7 @@ The script uses `hashPassword` from `better-auth/crypto` (scrypt/argon2 algorith
 ## 6. Verification Status
 
 All 6 core authentication capabilities were verified against the live Supabase PostgreSQL database:
-- Admin login with valid credentials: **PASS** (Status 200, role `SUPER_ADMIN`)
+- Admin login with valid credentials: **PASS** (Status 200, role `super_admin`)
 - Rejection of invalid credentials: **PASS** (Status 401)
 - Session persistence via cookie: **PASS** (Verified from PostgreSQL)
 - RBAC hierarchy check: **PASS**
@@ -113,13 +120,18 @@ All 6 core authentication capabilities were verified against the live Supabase P
 
 Configured in `.env.local` (and documented in `.env.example`):
 ```env
-# Better Auth Secret (minimum 32 random characters)
-BETTER_AUTH_SECRET="17f75554cdebbee61b5ca2302d9c636a05f834859ddb54538c9f43642e2158bc"
+# Better Auth Secret (minimum 32 random characters: openssl rand -hex 32)
+BETTER_AUTH_SECRET="your-secure-random-secret-min-32-chars"
 
-# Better Auth URLs
+# Better Auth URLs & Trusted Origins
 BETTER_AUTH_URL="http://localhost:3000"
+BETTER_AUTH_TRUSTED_ORIGINS="http://localhost:3000"
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 ```
+
+> [!NOTE]
+> **Secret Rotation Consequence:**
+> Rotating `BETTER_AUTH_SECRET` immediately invalidates all active session tokens. All staff and administrators will be required to sign in again.
 
 ---
 

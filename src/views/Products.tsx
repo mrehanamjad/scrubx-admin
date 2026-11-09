@@ -51,12 +51,14 @@ import { ProductStatusBadge, StockBadge } from "../components/shared/status-badg
 import { TableSkeleton } from "../components/ui/skeleton";
 import { formatPKR } from "../lib/format";
 import { useToast } from "../components/ui/toast";
+import { useCan } from "../components/providers/role-provider";
 import type { Product, ProductStatus, Category } from "../lib/types";
 import {
   archiveProductAction,
   deleteProductAction,
   createProductAction,
   updateProductAction,
+  getProductByIdAction,
 } from "../actions/products";
 
 type SortKey = "newest" | "name" | "price-asc" | "price-desc" | "stock-asc" | "stock-desc";
@@ -64,6 +66,13 @@ type SortKey = "newest" | "name" | "price-asc" | "price-desc" | "stock-asc" | "s
 interface ProductsProps {
   initialProducts?: Product[];
   initialCategories?: Category[];
+  initialPagination?: {
+    totalItems: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  };
+  initialQuery?: string;
 }
 
 function computeProductTotalStock(product: Product): number {
@@ -73,9 +82,12 @@ function computeProductTotalStock(product: Product): number {
 export default function ProductsPage({
   initialProducts = [],
   initialCategories = [],
+  initialPagination,
+  initialQuery = "",
 }: ProductsProps) {
   const router = useRouter();
   const { toast } = useToast();
+  const canWrite = useCan("product:write");
   const [products, setProducts] = useState<Product[]>(initialProducts);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
 
@@ -87,7 +99,16 @@ export default function ProductsPage({
     setCategories(initialCategories);
   }, [initialCategories]);
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
+  const handleSearchSubmit = () => {
+    const q = query.trim();
+    router.replace(q ? `/products?q=${encodeURIComponent(q)}` : "/products");
+  };
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<"all" | ProductStatus>("all");
   const [sort, setSort] = useState<SortKey>("newest");
@@ -171,30 +192,69 @@ export default function ProductsPage({
 
   const duplicateProduct = async (product: Product) => {
     try {
+      const fullRes = await getProductByIdAction({ id: product.id });
+      if (!fullRes.success || !fullRes.data) {
+        toast({
+          title: "Failed to duplicate product",
+          description: fullRes.error || "Could not retrieve product details.",
+          variant: "error",
+        });
+        return;
+      }
+
+      const full = fullRes.data;
+      const copySuffix = Date.now().toString(36).slice(-4);
+
+      // Map colors and build old colorId -> name lookup for variants and images (BUG-022)
+      const colorMap = new Map<string, string>();
+      const colorsPayload = full.colors.map((c, idx) => {
+        colorMap.set(c.id, c.name);
+        return {
+          name: c.name,
+          hexCode: c.hexCode || undefined,
+          sortOrder: c.sortOrder ?? idx,
+        };
+      });
+
+      const variantsPayload = full.variants.map((v, i) => ({
+        name: v.name,
+        sku: `${v.sku}-CP-${copySuffix}-${i + 1}`,
+        size: v.size || "Standard",
+        price: Number(v.price) || 0,
+        compareAtPrice: v.compareAtPrice ? Number(v.compareAtPrice) : null,
+        stock: v.stock || 0,
+        reorderLevel: v.reorderLevel ?? 5,
+        isActive: v.isActive,
+        colorName: v.colorId ? colorMap.get(v.colorId) : undefined,
+      }));
+
+      const imagesPayload = full.images.map((img, idx) => ({
+        imagekitFileId: img.imagekitFileId || null,
+        url: img.url,
+        thumbnailUrl: img.thumbnailUrl || null,
+        altText: img.altText || `${full.name} (Copy)`,
+        colorName: img.colorId ? colorMap.get(img.colorId) : undefined,
+        sortOrder: img.sortOrder ?? idx,
+      }));
+
       const res = await createProductAction({
-        name: `${product.name} (Copy)`,
-        slug: `${product.slug}-copy-${Date.now().toString(36)}`,
-        description: product.description || undefined,
-        categoryId: product.categoryId || undefined,
-        brand: product.brand || undefined,
-        gender: (product.gender as any) || "unisex",
-        material: product.material || undefined,
+        name: `${full.name} (Copy)`,
+        slug: `${full.slug}-copy-${Date.now().toString(36)}`,
+        description: full.description || undefined,
+        categoryId: full.category?.id || undefined,
+        brand: full.brand || undefined,
+        gender: (full.gender as any) || "unisex",
+        material: full.material || undefined,
         status: "draft",
-        isEngravable: product.engraveable,
+        isEngravable: full.isEngravable,
         isFeatured: false,
-        variants: product.variants.map((v, i) => ({
-          name: v.name,
-          sku: `${v.sku}-CP-${Date.now().toString(36).slice(-4)}`,
-          size: v.size,
-          price: v.price,
-          stock: v.stock,
-          reorderLevel: v.reorderLevel,
-          isActive: v.active,
-        })),
+        colors: colorsPayload,
+        variants: variantsPayload,
+        images: imagesPayload,
       });
 
       if (res.success) {
-        toast({ title: "Product duplicated", description: `${product.name} duplicated as draft.` });
+        toast({ title: "Product duplicated", description: `${full.name} duplicated as draft with all colours, variants and images.` });
         router.refresh();
       } else {
         toast({
@@ -298,12 +358,14 @@ export default function ProductsPage({
         title="Products"
         description="Manage listings, pricing and stock across every ScrubX product."
         actions={
-          <Button asChild>
-            <Link href="/products/new">
-              <PackagePlus className="h-4 w-4" />
-              Add product
-            </Link>
-          </Button>
+          canWrite ? (
+            <Button asChild>
+              <Link href="/products/new">
+                <PackagePlus className="h-4 w-4" />
+                Add product
+              </Link>
+            </Button>
+          ) : undefined
         }
       />
 
@@ -316,6 +378,7 @@ export default function ProductsPage({
                 setQuery(value);
                 setPage(1);
               }}
+              onSubmit={handleSearchSubmit}
               placeholder="Search by name, brand or SKU…"
               className="w-full lg:max-w-xs"
             />
@@ -376,7 +439,7 @@ export default function ProductsPage({
               </Select>
             </div>
 
-            {selected.length > 0 && (
+            {selected.length > 0 && canWrite && (
               <div className="ml-auto flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5">
                 <span className="text-[12.5px] font-medium text-brand-700">
                   {selected.length} selected
@@ -434,7 +497,7 @@ export default function ProductsPage({
                     <TableHead>SKU</TableHead>
                     <TableHead>Category</TableHead>
                     <TableHead className="text-right">Price</TableHead>
-                    <TableHead>Stock</TableHead>
+                    <TableHead>Available</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-10" />
                   </TableRow>
@@ -519,40 +582,44 @@ export default function ProductsPage({
                                   View listing
                                 </Link>
                               </DropdownMenuItem>
-                              <DropdownMenuItem asChild>
-                                <Link href={`/products/${product.id}/edit`}>
-                                  <Pencil className="h-3.5 w-3.5" />
-                                  Edit product
-                                </Link>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => duplicateProduct(product)}>
-                                <Copy className="h-3.5 w-3.5" />
-                                Duplicate
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              {product.status !== "archived" ? (
-                                <DropdownMenuItem
-                                  onClick={() => handleArchive(product.id, product.name)}
-                                >
-                                  <Archive className="h-3.5 w-3.5" />
-                                  Archive
-                                </DropdownMenuItem>
-                              ) : (
-                                <DropdownMenuItem
-                                  onClick={() => handleRestore(product.id, product.name)}
-                                >
-                                  <Package className="h-3.5 w-3.5" />
-                                  Restore to active
-                                </DropdownMenuItem>
+                              {canWrite && (
+                                <>
+                                  <DropdownMenuItem asChild>
+                                    <Link href={`/products/${product.id}/edit`}>
+                                      <Pencil className="h-3.5 w-3.5" />
+                                      Edit product
+                                    </Link>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => duplicateProduct(product)}>
+                                    <Copy className="h-3.5 w-3.5" />
+                                    Duplicate
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  {product.status !== "archived" ? (
+                                    <DropdownMenuItem
+                                      onClick={() => handleArchive(product.id, product.name)}
+                                    >
+                                      <Archive className="h-3.5 w-3.5" />
+                                      Archive
+                                    </DropdownMenuItem>
+                                  ) : (
+                                    <DropdownMenuItem
+                                      onClick={() => handleRestore(product.id, product.name)}
+                                    >
+                                      <Package className="h-3.5 w-3.5" />
+                                      Restore to active
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    destructive
+                                    onClick={() => setDeleteTarget(product)}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                </>
                               )}
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                destructive
-                                onClick={() => setDeleteTarget(product)}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                Delete
-                              </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>
@@ -562,13 +629,21 @@ export default function ProductsPage({
                 </TableBody>
               </Table>
               <Pagination
-                page={safePage}
-                pageSize={pageSize}
-                total={filtered.length}
-                onPageChange={setPage}
+                page={initialPagination ? initialPagination.currentPage : safePage}
+                pageSize={initialPagination ? initialPagination.limit : pageSize}
+                total={initialPagination ? initialPagination.totalItems : filtered.length}
+                onPageChange={(newPage) => {
+                  setPage(newPage);
+                  if (initialPagination) {
+                    router.push(`?page=${newPage}&limit=${pageSize}`);
+                  }
+                }}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
                   setPage(1);
+                  if (initialPagination) {
+                    router.push(`?page=1&limit=${size}`);
+                  }
                 }}
               />
             </>

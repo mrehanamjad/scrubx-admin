@@ -31,6 +31,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { PageHeader } from "../components/shared/page-header";
 import { ConfirmDialog } from "../components/shared/confirm-dialog";
 import { useToast } from "../components/ui/toast";
+import { useCan } from "../components/providers/role-provider";
 import { cn } from "../lib/utils";
 import { updateStoreSettingsBatchAction } from "../actions/settings";
 
@@ -86,6 +87,7 @@ export default function SettingsPage({
 }: SettingsPageProps) {
   const router = useRouter();
   const { toast } = useToast();
+  const canWrite = useCan("settings:write");
   const [confirmReset, setConfirmReset] = useState(false);
   const [settingsState, setSettingsState] = useState<SettingsData>(initialSettings);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -395,15 +397,17 @@ export default function SettingsPage({
               </CardContent>
             </Card>
 
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => reset()} disabled={isSubmitting}>
-                Discard changes
-              </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                <Save className="h-4 w-4" />
-                {isSubmitting ? "Saving..." : "Save settings"}
-              </Button>
-            </div>
+            {canWrite && (
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => reset()} disabled={isSubmitting}>
+                  Discard changes
+                </Button>
+                <Button type="submit" disabled={isSubmitting}>
+                  <Save className="h-4 w-4" />
+                  {isSubmitting ? "Saving..." : "Save settings"}
+                </Button>
+              </div>
+            )}
           </form>
         </TabsContent>
 

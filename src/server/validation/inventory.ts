@@ -58,6 +58,7 @@ export const inventoryMovementReasonEnum = z.enum([
   "sale",
   "cancellation",
   "return",
+  "correction",
 ]);
 
 export type InventoryMovementReason = z.infer<typeof inventoryMovementReasonEnum>;

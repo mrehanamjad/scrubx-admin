@@ -22,8 +22,13 @@ export default function ErrorBoundary({
       </div>
       <h2 className="mt-4 text-base font-semibold text-ink">Something went wrong</h2>
       <p className="mt-1 max-w-md text-sm text-ink-muted">
-        {error.message || "An unexpected error occurred while loading this page."}
+        Something went wrong while loading this page. If it persists, contact a Super Administrator.
       </p>
+      {error.digest && (
+        <p className="mt-1.5 font-mono text-[11.5px] text-ink-muted">
+          Reference: {error.digest}
+        </p>
+      )}
       <div className="mt-6 flex gap-3">
         <Button onClick={() => reset()} variant="default">
           Try again

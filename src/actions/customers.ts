@@ -7,6 +7,9 @@ import {
   updateCustomerSchema,
   customerAddressSchema,
   deleteCustomerAddressSchema,
+  addCustomerNoteSchema,
+  deleteCustomerNoteSchema,
+  getCustomerActivityFeedSchema,
 } from "../server/validation/customers.ts";
 
 /**
@@ -55,5 +58,63 @@ export const deleteCustomerAddressAction = createSafeAction(
     const success = await customerService.deleteAddress(input, admin);
     revalidatePath(`/customers/${input.customerId}`);
     return success;
+  }
+);
+
+/**
+ * Server Action: Add customer administrative note.
+ * Strictly requires administrator privileges.
+ */
+export const addCustomerNoteAction = createSafeAction(
+  {
+    schema: addCustomerNoteSchema,
+    requiredRole: "admin",
+  },
+  async ({ input, admin }) => {
+    const note = await customerService.addNote(
+      input.customerId,
+      input.body,
+      admin,
+      input.isPinned ?? false
+    );
+    revalidatePath(`/customers/${input.customerId}`);
+    return note;
+  }
+);
+
+/**
+ * Server Action: Delete customer administrative note (soft delete).
+ * Strictly requires super administrator privileges.
+ */
+export const deleteCustomerNoteAction = createSafeAction(
+  {
+    schema: deleteCustomerNoteSchema,
+    requiredRole: "super_admin",
+  },
+  async ({ input, admin }) => {
+    const success = await customerService.deleteNote(input.id, admin);
+    revalidatePath(`/customers/${input.customerId}`);
+    return success;
+  }
+);
+
+/**
+ * Server Action: Get unified customer activity timeline (ECOM-010).
+ * Requires staff privileges.
+ */
+export const getCustomerActivityFeedAction = createSafeAction(
+  {
+    schema: getCustomerActivityFeedSchema,
+    requiredRole: "staff",
+  },
+  async ({ input, admin }) => {
+    const beforeDate = input.before ? new Date(input.before) : undefined;
+    const feed = await customerService.getActivityFeed(
+      input.customerId,
+      admin,
+      input.limit,
+      beforeDate
+    );
+    return feed;
   }
 );

@@ -26,9 +26,8 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { uploadToImageKit, type UploadedFileResult } from "@/lib/imagekit-upload";
-import { deleteMediaAction } from "@/actions/media";
 import { getImageThumbnailUrl } from "@/lib/imagekit-url";
-import { cn } from "@/lib/utils";
+import { cn, isAllowedImageHost } from "@/lib/utils";
 
 export interface UploadedMedia {
   fileId?: string;
@@ -77,7 +76,6 @@ const DEFAULT_ACCEPTED_MIMES = [
   "image/png",
   "image/webp",
   "image/avif",
-  "image/svg+xml",
 ];
 
 const DEFAULT_MAX_SIZE = 5 * 1024 * 1024; // 5MB
@@ -123,10 +121,10 @@ export function ImageUpload({
       ? [typeof value === "string" ? { url: value, name: "Image" } : value]
       : [];
 
-  // Validate single file against constraints
+  // Validate single file against constraints (UX-only client hint; server is authoritative per SEC-007)
   const validateFile = (file: File): string | null => {
     if (!acceptedMimeTypes.includes(file.type)) {
-      return `File type '${file.type}' is not supported. Please choose a JPG, PNG, WebP, AVIF, or SVG image.`;
+      return `File type '${file.type}' is not supported. Please choose a JPG, PNG, WebP, or AVIF raster image.`;
     }
     if (file.size > maxSizeInBytes) {
       const maxMb = (maxSizeInBytes / (1024 * 1024)).toFixed(0);
@@ -287,10 +285,19 @@ export function ImageUpload({
     }
   };
 
-  // Manual URL submission
+  // Manual URL submission (PERF-010: validate host before accepting)
   const handleAddManualUrl = () => {
     const trimmed = manualUrl.trim();
     if (!trimmed) return;
+
+    if (!isAllowedImageHost(trimmed)) {
+      toast({
+        title: "Invalid Image Host",
+        description: "Only HTTPS images hosted on ImageKit (ik.imagekit.io) or local paths are permitted.",
+        variant: "error",
+      });
+      return;
+    }
 
     const media: UploadedMedia = {
       url: trimmed,
@@ -306,22 +313,12 @@ export function ImageUpload({
     toast({ title: "Image URL added" });
   };
 
-  // Remove handler
-  const handleRemoveMedia = async (media: UploadedMedia) => {
+  // Remove handler (BUG-017: updates parent state only; does NOT eagerly purge remote storage)
+  const handleRemoveMedia = (media: UploadedMedia) => {
     if (disabled) return;
 
-    // Call onRemove callback
     if (onRemove) {
       onRemove(media);
-    }
-
-    // If file has an ImageKit fileId, trigger server purge in background
-    if (media.fileId) {
-      try {
-        await deleteMediaAction(media.fileId);
-      } catch (err) {
-        console.warn(`[Background Deletion Error for ${media.fileId}]:`, err);
-      }
     }
   };
 

@@ -103,13 +103,19 @@ export type ProductVariantInput = z.infer<typeof productVariantInputSchema>;
 
 export const productImageInputSchema = z.object({
   id: uuidSchema.optional(),
-  imagekitFileId: z.string().trim().min(1, "ImageKit file ID is required."),
-  url: z.string().trim().min(1, "Image URL is required."),
-  thumbnailUrl: z.string().trim().optional().nullable(),
+  imagekitFileId: z
+    .string()
+    .trim()
+    .regex(/^[a-zA-Z0-9_-]+$/, "Invalid ImageKit file ID format.")
+    .max(128)
+    .optional()
+    .nullable(),
+  url: z.string().trim().url("Valid URL required.").max(2048),
+  thumbnailUrl: z.string().trim().url().max(2048).optional().nullable(),
   altText: z.string().trim().max(255).optional().nullable(),
   colorId: uuidSchema.nullable().optional(),
-  colorName: z.string().trim().optional(),
-  sortOrder: z.number().int().min(0).optional(),
+  colorName: z.string().trim().max(100).optional().nullable(),
+  sortOrder: z.coerce.number().int().min(0).default(0),
 });
 
 export type ProductImageInput = z.infer<typeof productImageInputSchema>;
@@ -162,8 +168,14 @@ export const productFilterSchema = z.object({
   categoryId: uuidSchema.optional(),
   status: z.enum(["draft", "active", "archived"]).optional(),
   gender: z.enum(["men", "women", "unisex"]).optional(),
-  isFeatured: z.coerce.boolean().optional(),
-  inStock: z.coerce.boolean().optional(),
+  isFeatured: z
+    .union([z.boolean(), z.literal("true"), z.literal("false")])
+    .transform((v) => (typeof v === "boolean" ? v : v === "true"))
+    .optional(),
+  inStock: z
+    .union([z.boolean(), z.literal("true"), z.literal("false")])
+    .transform((v) => (typeof v === "boolean" ? v : v === "true"))
+    .optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   sortBy: z.enum(["name", "createdAt", "updatedAt", "price", "status"]).default("createdAt"),
@@ -187,3 +199,11 @@ export const deleteProductSchema = z.object({
 });
 
 export type DeleteProductInput = z.infer<typeof deleteProductSchema>;
+
+export const detachProductImageSchema = z.object({
+  productId: uuidSchema,
+  imageId: uuidSchema,
+});
+
+export type DetachProductImageInput = z.infer<typeof detachProductImageSchema>;
+

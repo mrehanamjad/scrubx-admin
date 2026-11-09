@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { uuidSchema } from "./common.ts";
+import { uuidSchema, pricePkrSchema } from "./common.ts";
 
 /**
  * Payment Statuses in PostgreSQL Enum
@@ -40,9 +40,33 @@ export const submitPaymentProofSchema = z.object({
   paymentId: uuidSchema,
   senderName: z.string().trim().max(100).optional().nullable(),
   senderAccountLast4: z.string().trim().max(10).optional().nullable(),
-  transactionReference: z.string().trim().max(100).optional().nullable(),
-  proofUrl: z.string().trim().optional().nullable(),
-  imagekitFileId: z.string().trim().optional().nullable(),
+  transactionReference: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9._-]{4,64}$/, "Transaction reference must be 4-64 alphanumeric characters.")
+    .optional()
+    .nullable(),
+  proofUrl: z
+    .string()
+    .trim()
+    .url("Invalid proof URL format.")
+    .max(2048)
+    .refine(
+      (u) => {
+        const endpoint = process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT || "https://ik.imagekit.io";
+        return u.startsWith(endpoint);
+      },
+      "Proof must be hosted on the ScrubX media CDN."
+    )
+    .optional()
+    .nullable(),
+  imagekitFileId: z
+    .string()
+    .trim()
+    .regex(/^[a-zA-Z0-9_-]+$/, "Invalid ImageKit file reference.")
+    .max(128)
+    .optional()
+    .nullable(),
   customerNotes: z.string().trim().max(500).optional().nullable(),
 });
 
@@ -56,6 +80,7 @@ export const verifyPaymentSchema = z
     paymentId: uuidSchema,
     action: z.enum(["approve", "reject"]),
     rejectionReason: z.string().trim().max(500).optional().nullable(),
+    allowDuplicateOverride: z.boolean().optional(),
   })
   .refine(
     (data) => {
@@ -73,11 +98,13 @@ export const verifyPaymentSchema = z
 export type VerifyPaymentInput = z.infer<typeof verifyPaymentSchema>;
 
 /**
- * Process Payment Refund Schema
+ * Process Payment Refund Schema (BUG-010, DB-005)
  */
 export const refundPaymentSchema = z.object({
   paymentId: uuidSchema,
+  refundAmount: pricePkrSchema.refine((v) => Number(v) > 0, "Refund amount must be positive."),
   reason: z.string().trim().min(3, "Refund reason is required.").max(500),
+  restock: z.boolean().optional().default(false),
 });
 
 export type RefundPaymentInput = z.infer<typeof refundPaymentSchema>;

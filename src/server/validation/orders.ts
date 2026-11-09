@@ -134,14 +134,26 @@ export const updateOrderStatusSchema = z.object({
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
 
 /**
+ * Bulk Order Status Update Schema (ECOM-009)
+ */
+export const bulkUpdateOrderStatusSchema = z.object({
+  orderIds: z
+    .array(uuidSchema)
+    .min(1, "At least one order ID is required.")
+    .max(50, "Maximum 50 orders can be updated at once."),
+  status: orderStatusEnumSchema,
+  note: z.string().trim().max(500).optional().nullable(),
+});
+
+export type BulkUpdateOrderStatusInput = z.infer<typeof bulkUpdateOrderStatusSchema>;
+
+/**
  * Update Order Shipping & Courier Schema
  */
 export const updateOrderShippingSchema = z.object({
   orderId: uuidSchema,
   courier: z.string().trim().max(100).optional().nullable(),
   trackingNumber: z.string().trim().max(100).optional().nullable(),
-  markShipped: z.boolean().optional(),
-  markDelivered: z.boolean().optional(),
 });
 
 export type UpdateOrderShippingInput = z.infer<typeof updateOrderShippingSchema>;
@@ -155,3 +167,68 @@ export const addOrderNoteSchema = z.object({
 });
 
 export type AddOrderNoteInput = z.infer<typeof addOrderNoteSchema>;
+
+/**
+ * Returns & Exchanges Schemas (ECOM-002, ECOM-003)
+ */
+export const requestOrderReturnSchema = z.object({
+  orderId: uuidSchema,
+  reason: z.string().trim().min(3, "Reason must be at least 3 characters.").max(500),
+  notes: z.string().trim().max(1000).optional(),
+  items: z
+    .array(
+      z.object({
+        orderItemId: uuidSchema,
+        quantity: z.number().int().positive("Return quantity must be positive."),
+        restock: z.boolean().optional().default(true),
+      })
+    )
+    .min(1, "At least one item must be selected for return."),
+});
+
+export type RequestOrderReturnInput = z.infer<typeof requestOrderReturnSchema>;
+
+export const approveOrderReturnSchema = z.object({
+  returnId: uuidSchema,
+});
+
+export type ApproveOrderReturnInput = z.infer<typeof approveOrderReturnSchema>;
+
+export const receiveOrderReturnSchema = z.object({
+  returnId: uuidSchema,
+  items: z
+    .array(
+      z.object({
+        returnItemId: uuidSchema,
+        restock: z.boolean(),
+      })
+    )
+    .optional(),
+});
+
+export type ReceiveOrderReturnInput = z.infer<typeof receiveOrderReturnSchema>;
+
+export const completeOrderReturnSchema = z.object({
+  returnId: uuidSchema,
+  refundAmount: z.number().positive("Refund amount must be positive.").optional(),
+});
+
+export type CompleteOrderReturnInput = z.infer<typeof completeOrderReturnSchema>;
+
+export const createOrderExchangeSchema = z.object({
+  orderId: uuidSchema,
+  reason: z.string().trim().min(3, "Exchange reason is required.").max(500),
+  returnItems: z
+    .array(
+      z.object({
+        orderItemId: uuidSchema,
+        quantity: z.number().int().positive(),
+      })
+    )
+    .min(1, "Select at least one item to exchange."),
+  replacementVariantId: uuidSchema,
+  replacementQuantity: z.number().int().positive().default(1),
+});
+
+export type CreateOrderExchangeInput = z.infer<typeof createOrderExchangeSchema>;
+

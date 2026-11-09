@@ -97,7 +97,7 @@ export interface ProductDetailBundle {
   }>;
   images: Array<{
     id: string;
-    imagekitFileId: string;
+    imagekitFileId: string | null;
     url: string;
     thumbnailUrl: string | null;
     altText: string | null;
@@ -138,6 +138,23 @@ export class ProductRepository {
       conditions.push(eq(products.isFeatured, filter.isFeatured));
     }
 
+    // BUG-014: Filter by inStock (available stock = quantityOnHand - quantityReserved > 0)
+    if (filter.inStock === true) {
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM inventory i
+        JOIN product_variants pv ON pv.id = i.variant_id
+        WHERE pv.product_id = ${products.id}
+          AND (i.quantity_on_hand - i.quantity_reserved) > 0
+      )`);
+    } else if (filter.inStock === false) {
+      conditions.push(sql`NOT EXISTS (
+        SELECT 1 FROM inventory i
+        JOIN product_variants pv ON pv.id = i.variant_id
+        WHERE pv.product_id = ${products.id}
+          AND (i.quantity_on_hand - i.quantity_reserved) > 0
+      )`);
+    }
+
     // Text search on name, description, slug
     if (filter.q) {
       const pattern = `%${filter.q}%`;
@@ -173,6 +190,14 @@ export class ProductRepository {
         break;
       case "updatedAt":
         orderByClause = [sortDir(products.updatedAt)];
+        break;
+      case "price":
+        // BUG-014: Sort by minimum variant price
+        orderByClause = [
+          filter.sortOrder === "asc"
+            ? sql`(SELECT MIN(pv.price) FROM product_variants pv WHERE pv.product_id = ${products.id}) ASC NULLS LAST`
+            : sql`(SELECT MIN(pv.price) FROM product_variants pv WHERE pv.product_id = ${products.id}) DESC NULLS LAST`,
+        ];
         break;
       case "createdAt":
       default:
@@ -214,38 +239,43 @@ export class ProductRepository {
 
     const productIds = matchedProducts.map((p) => p.id);
 
-    // 4. Fetch variants and aggregated inventory for these products
-    const variantsData = await executor
-      .select({
-        productId: productVariants.productId,
-        price: productVariants.price,
-        stock: inventory.quantityOnHand,
-      })
-      .from(productVariants)
-      .leftJoin(inventory, eq(inventory.variantId, productVariants.id))
-      .where(inArray(productVariants.productId, productIds));
+    // PERF-003: Parallelize follow-up queries (variants, images, colors)
+    const [variantsData, imagesData, colorsData] = await Promise.all([
+      // 4. Fetch variants and aggregated inventory for these products (BUG-015: available stock = greatest(onHand - reserved, 0))
+      executor
+        .select({
+          productId: productVariants.productId,
+          price: productVariants.price,
+          onHand: inventory.quantityOnHand,
+          reserved: inventory.quantityReserved,
+          stock: sql<number>`greatest(coalesce(${inventory.quantityOnHand}, 0) - coalesce(${inventory.quantityReserved}, 0), 0)::int`,
+        })
+        .from(productVariants)
+        .leftJoin(inventory, eq(inventory.variantId, productVariants.id))
+        .where(inArray(productVariants.productId, productIds)),
 
-    // 5. Fetch primary images (lowest sortOrder per product)
-    const imagesData = await executor
-      .select({
-        productId: productImages.productId,
-        url: productImages.url,
-        thumbnailUrl: productImages.thumbnailUrl,
-        altText: productImages.altText,
-        sortOrder: productImages.sortOrder,
-      })
-      .from(productImages)
-      .where(inArray(productImages.productId, productIds))
-      .orderBy(productImages.sortOrder);
+      // 5. Fetch primary images (lowest sortOrder per product)
+      executor
+        .select({
+          productId: productImages.productId,
+          url: productImages.url,
+          thumbnailUrl: productImages.thumbnailUrl,
+          altText: productImages.altText,
+          sortOrder: productImages.sortOrder,
+        })
+        .from(productImages)
+        .where(inArray(productImages.productId, productIds))
+        .orderBy(productImages.sortOrder),
 
-    // 6. Fetch color counts
-    const colorsData = await executor
-      .select({
-        productId: productColors.productId,
-        colorId: productColors.id,
-      })
-      .from(productColors)
-      .where(inArray(productColors.productId, productIds));
+      // 6. Fetch color counts
+      executor
+        .select({
+          productId: productColors.productId,
+          colorId: productColors.id,
+        })
+        .from(productColors)
+        .where(inArray(productColors.productId, productIds)),
+    ]);
 
     // Map aggregated metrics
     const items: ProductListItem[] = matchedProducts.map((p) => {

@@ -33,7 +33,9 @@ import { PageHeader } from "../components/shared/page-header";
 import { EmptyState } from "../components/shared/empty-state";
 import { SearchInput } from "../components/shared/search-input";
 import { Avatar } from "../components/shared/thumb";
+import { Pagination } from "../components/shared/pagination";
 import { useToast } from "../components/ui/toast";
+import { useCan } from "../components/providers/role-provider";
 import { PAYMENT_METHOD_LABEL } from "../lib/constants";
 import { formatDateTime, formatPKR } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -42,11 +44,21 @@ import { approvePaymentAction, rejectPaymentAction } from "../actions/payments";
 
 interface PaymentsProps {
   initialSubmissions?: PaymentSubmission[];
+  initialPagination?: {
+    totalItems: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  };
 }
 
-export default function PaymentsPage({ initialSubmissions = [] }: PaymentsProps) {
+export default function PaymentsPage({
+  initialSubmissions = [],
+  initialPagination,
+}: PaymentsProps) {
   const router = useRouter();
   const { toast } = useToast();
+  const canVerify = useCan("payment:verify");
   const [submissions, setSubmissions] = useState<PaymentSubmission[]>(initialSubmissions);
 
   useEffect(() => {
@@ -250,8 +262,8 @@ export default function PaymentsPage({ initialSubmissions = [] }: PaymentsProps)
               <SubmissionList
                 items={pending}
                 onViewProof={(id) => setProofTarget(id)}
-                onApprove={handleApprove}
-                onReject={(id) => setRejectTarget(id)}
+                onApprove={canVerify ? handleApprove : undefined}
+                onReject={canVerify ? (id) => setRejectTarget(id) : undefined}
                 emptyState={
                   <EmptyState
                     className="m-4"
@@ -291,6 +303,19 @@ export default function PaymentsPage({ initialSubmissions = [] }: PaymentsProps)
               />
             </TabsContent>
           </Tabs>
+          {initialPagination && (
+            <Pagination
+              page={initialPagination.currentPage}
+              pageSize={initialPagination.limit}
+              total={initialPagination.totalItems}
+              onPageChange={(newPage) => {
+                router.push(`?page=${newPage}&limit=${initialPagination.limit}`);
+              }}
+              onPageSizeChange={(size) => {
+                router.push(`?page=1&limit=${size}`);
+              }}
+            />
+          )}
         </CardContent>
       </Card>
 
@@ -338,7 +363,7 @@ export default function PaymentsPage({ initialSubmissions = [] }: PaymentsProps)
             <Button variant="outline" onClick={() => setProofTarget(null)}>
               Close
             </Button>
-            {proof?.status === "submitted" && (
+            {proof?.status === "submitted" && canVerify && (
               <>
                 <Button
                   variant="danger-outline"
@@ -453,6 +478,11 @@ function SubmissionList({
               {item.status === "submitted" && <Badge variant="warning">Needs review</Badge>}
               {item.status === "approved" && <Badge variant="success">Approved</Badge>}
               {item.status === "rejected" && <Badge variant="danger">Rejected</Badge>}
+              {item.isDuplicate && (
+                <Badge variant="danger" className="border border-rose-300 bg-rose-50 text-rose-700 font-semibold">
+                  Duplicate Reference
+                </Badge>
+              )}
             </div>
             <div className="mt-1.5 flex items-center gap-2">
               <Avatar name={item.customerName} size="sm" />

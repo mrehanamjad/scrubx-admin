@@ -1,4 +1,6 @@
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../../db/index.ts";
+import { payments, type Payment } from "../../db/schema/index.ts";
 import {
   paymentRepository,
   PaymentRepository,
@@ -11,8 +13,10 @@ import {
   PaymentMethodRepository,
 } from "../repositories/payment-method.repository.ts";
 import { inventoryService, InventoryService } from "./inventory.service.ts";
+import { couponService as defaultCouponService, CouponService } from "./coupon.service.ts";
+import { orderService as defaultOrderService, OrderService } from "./order.service.ts";
 import { assertRole, type AdminContext } from "../auth.ts";
-import { NotFoundError, ValidationError } from "../errors.ts";
+import { NotFoundError, ValidationError, ConflictError } from "../errors.ts";
 import type {
   PaymentFilterInput,
   SubmitPaymentProofInput,
@@ -20,7 +24,6 @@ import type {
   RefundPaymentInput,
 } from "../validation/payments.ts";
 import type { PaginatedResult } from "../types.ts";
-import type { Payment } from "../../db/schema/index.ts";
 import type { OrderStatus } from "../validation/orders.ts";
 
 export class PaymentService {
@@ -28,17 +31,23 @@ export class PaymentService {
   private readonly orderRepo: OrderRepository;
   private readonly invService: InventoryService;
   private readonly paymentMethodRepo: PaymentMethodRepository;
+  private readonly couponService: CouponService;
+  private readonly orderService: OrderService;
 
   constructor(
     paymentRepo: PaymentRepository = paymentRepository,
     orderRepo: OrderRepository = orderRepository,
     invService: InventoryService = inventoryService,
-    paymentMethodRepo: PaymentMethodRepository = paymentMethodRepository
+    paymentMethodRepo: PaymentMethodRepository = paymentMethodRepository,
+    couponService: CouponService = defaultCouponService,
+    orderService: OrderService = defaultOrderService
   ) {
     this.paymentRepo = paymentRepo;
     this.orderRepo = orderRepo;
     this.invService = invService;
     this.paymentMethodRepo = paymentMethodRepo;
+    this.couponService = couponService;
+    this.orderService = orderService;
   }
 
   /**
@@ -77,8 +86,12 @@ export class PaymentService {
 
   /**
    * Submits payment screenshot proof and TID, moving payment to awaiting_verification.
+   * Enforces source-state allowlist and order validation (BUG-008, SEC-014).
    */
-  async submitPaymentProof(input: SubmitPaymentProofInput): Promise<Payment> {
+  async submitPaymentProof(
+    input: SubmitPaymentProofInput,
+    admin?: AdminContext
+  ): Promise<Payment> {
     const existing = await this.paymentRepo.findById(input.paymentId);
     if (!existing) {
       throw new NotFoundError("Payment", input.paymentId);
@@ -97,12 +110,55 @@ export class PaymentService {
         throw new NotFoundError("Payment", input.paymentId);
       }
 
-      const existingMetadata = payment.metadata || {};
+      // BUG-008: Source-state allowlist guard
+      const SUBMITTABLE = new Set(["pending", "rejected", "awaiting_verification"]);
+      if (!SUBMITTABLE.has(payment.status)) {
+        throw new ValidationError(
+          `Payment with status '${payment.status}' cannot accept a new proof.`
+        );
+      }
+
+      // BUG-008: Order state validation
+      const ACCEPTABLE_ORDER_STATUSES = new Set(["awaiting_payment", "payment_submitted", "pending"]);
+      if (!ACCEPTABLE_ORDER_STATUSES.has(order.status)) {
+        throw new ValidationError("This order can no longer accept payment proof.");
+      }
+
+      if (payment.orderId !== order.id) {
+        throw new ValidationError("Payment does not belong to the specified order.");
+      }
+
+      // DB-013: Soft duplicate transaction reference detector
+      const normalizedTxnRef = input.transactionReference ? input.transactionReference.trim().toUpperCase() : null;
+      let duplicateReference: { paymentId: string; orderId: string } | null = null;
+
+      if (normalizedTxnRef) {
+        const [duplicate] = await tx
+          .select({ id: payments.id, orderId: payments.orderId })
+          .from(payments)
+          .where(
+            and(
+              eq(payments.paymentMethodId, payment.paymentMethodId),
+              sql`upper(trim(${payments.transactionReference})) = ${normalizedTxnRef}`,
+              ne(payments.id, payment.id),
+              ne(payments.status, "rejected")
+            )
+          )
+          .limit(1);
+
+        if (duplicate) {
+          duplicateReference = { paymentId: duplicate.id, orderId: duplicate.orderId };
+        }
+      }
+
+      const existingMetadata = (payment.metadata as Record<string, any>) || {};
       const updatedMetadata = {
         ...existingMetadata,
         imagekitFileId: input.imagekitFileId || existingMetadata.imagekitFileId,
         proofUploadedAt: new Date().toISOString(),
         customerNotes: input.customerNotes || existingMetadata.customerNotes,
+        submittedBy: admin?.id || "customer",
+        ...(duplicateReference ? { duplicateReference } : {}),
       };
 
       const updatedPayment = await this.paymentRepo.update(
@@ -111,8 +167,11 @@ export class PaymentService {
           status: "awaiting_verification",
           senderName: input.senderName || payment.senderName,
           senderAccountLast4: input.senderAccountLast4 || payment.senderAccountLast4,
-          transactionReference: input.transactionReference || payment.transactionReference,
+          transactionReference: input.transactionReference ? input.transactionReference.trim().toUpperCase() : payment.transactionReference,
           proofUrl: input.proofUrl || payment.proofUrl,
+          verifiedBy: null,
+          verifiedAt: null,
+          rejectionReason: null,
           metadata: updatedMetadata,
         },
         tx
@@ -124,8 +183,8 @@ export class PaymentService {
           order.id,
           "payment_submitted",
           "awaiting_payment",
-          `Customer submitted payment proof (TID: ${input.transactionReference || "N/A"}).`,
-          "system",
+          `Payment proof submitted (TID: ${input.transactionReference || "N/A"}).`,
+          admin?.id || "system",
           tx
         );
       }
@@ -136,7 +195,7 @@ export class PaymentService {
 
   /**
    * Approves payment proof, advances order status to confirmed, and idempotently commits stock sale.
-   * Strictly requires administrator (admin or super_admin) role.
+   * Strictly requires administrator (admin or super_admin) role (BUG-009).
    */
   async approvePayment(
     input: VerifyPaymentInput,
@@ -167,6 +226,29 @@ export class PaymentService {
         return payment;
       }
 
+      // BUG-009: Reject terminal payment states
+      if (["refunded", "failed"].includes(payment.status)) {
+        throw new ValidationError(`Cannot approve a payment with status '${payment.status}'.`);
+      }
+
+      // BUG-009: Reject cancelled or refunded orders
+      if (["cancelled", "refunded"].includes(order.status)) {
+        throw new ValidationError(
+          `Order ${order.orderNumber} is ${order.status} and cannot accept payment approval.`
+        );
+      }
+
+      // ECOM-006: Guard against duplicate transaction references
+      const meta = (payment.metadata as any) || {};
+      if (meta.duplicateReference && !input.allowDuplicateOverride) {
+        throw new ConflictError(
+          `Transaction reference "${payment.transactionReference || ""}" is already attached to another payment. Super admin override required.`
+        );
+      }
+      if (meta.duplicateReference && input.allowDuplicateOverride) {
+        assertRole(admin, ["super_admin"]);
+      }
+
       const now = new Date();
       const updatedPayment = await this.paymentRepo.update(
         payment.id,
@@ -181,7 +263,7 @@ export class PaymentService {
       );
 
       // 3. Advance Order to Confirmed
-      if (["awaiting_payment", "payment_submitted"].includes(order.status)) {
+      if (["awaiting_payment", "payment_submitted", "pending"].includes(order.status)) {
         await this.orderRepo.updateOrderStatus(
           order.id,
           "confirmed",
@@ -206,6 +288,16 @@ export class PaymentService {
             }
           }
         }
+      } else {
+        // Instalment approval on already confirmed/processing order: audit in history
+        await this.orderRepo.addNote(
+          {
+            orderId: order.id,
+            body: `Additional payment of PKR ${payment.amount} verified and approved.`,
+            createdBy: admin.id,
+          },
+          tx
+        );
       }
 
       return updatedPayment!;
@@ -286,7 +378,7 @@ export class PaymentService {
 
   /**
    * Records a processed monetary refund.
-   * Strictly requires administrator (admin or super_admin) role.
+   * Strictly requires administrator (admin or super_admin) role (BUG-010).
    */
   async refundPayment(
     input: RefundPaymentInput,
@@ -300,7 +392,7 @@ export class PaymentService {
     }
 
     return db.transaction(async (tx) => {
-      // 1. Lock Order First
+      // 1. Lock Order First (uniform lock order: 1. orders -> 2. payments -> 3. inventory)
       const order = await this.orderRepo.findForUpdate(targetPayment.orderId, tx);
       if (!order) {
         throw new NotFoundError("Order", targetPayment.orderId);
@@ -318,27 +410,127 @@ export class PaymentService {
         );
       }
 
+      const refundAmountNum = Number(input.refundAmount);
+      if (isNaN(refundAmountNum) || refundAmountNum <= 0) {
+        throw new ValidationError("Refund amount must be a positive number.");
+      }
+
+      const currentRefundAmount = Number(payment.refundAmount || 0);
+      const paymentAmount = Number(payment.amount);
+      const maxRefundable = paymentAmount - currentRefundAmount;
+
+      if (refundAmountNum > maxRefundable + 0.0001) {
+        throw new ValidationError(
+          `Refund amount PKR ${refundAmountNum} exceeds remaining refundable balance PKR ${maxRefundable.toFixed(2)}.`
+        );
+      }
+
+      const totalRefundedOnPayment = currentRefundAmount + refundAmountNum;
+      const isPaymentFullyRefunded = totalRefundedOnPayment >= paymentAmount - 0.0001;
+      const now = new Date();
+
+      const existingMetadata = payment.metadata || {};
+      const refundsHistory = [
+        ...(existingMetadata.refunds || []),
+        {
+          amount: refundAmountNum,
+          reason: input.reason,
+          refundedBy: admin.id,
+          refundedAt: now.toISOString(),
+        },
+      ];
+
       const updatedPayment = await this.paymentRepo.update(
         payment.id,
         {
-          status: "refunded",
+          status: isPaymentFullyRefunded ? "refunded" : "paid",
+          refundAmount: totalRefundedOnPayment.toFixed(2),
+          refundedAt: now,
+          refundedBy: admin.id,
+          metadata: {
+            ...existingMetadata,
+            refunds: refundsHistory,
+          },
         },
         tx
       );
 
-      // Check if all order payments are now refunded
+      // Check sum of refunds across all payments on this order
       const allPayments = await this.paymentRepo.findByOrderId(order.id, tx);
-      const allRefunded = allPayments.every((p) =>
-        p.id === payment.id ? true : p.status === "refunded"
-      );
+      const totalRefundedOnOrder = allPayments.reduce((sum, p) => {
+        if (p.id === payment.id) {
+          return sum + totalRefundedOnPayment;
+        }
+        return sum + Number(p.refundAmount || (p.status === "refunded" ? p.amount : 0));
+      }, 0);
 
-      if (allRefunded) {
-        await this.orderRepo.updateOrderStatus(
-          order.id,
-          "refunded",
-          order.status as OrderStatus,
-          `Payment of PKR ${payment.amount} refunded. Reason: ${input.reason}`,
-          admin.id,
+      const orderTotal = Number(order.total);
+      const isOrderFullyRefunded = totalRefundedOnOrder >= orderTotal - 0.0001;
+
+      if (isOrderFullyRefunded) {
+        // Full refund path
+        if (["confirmed", "processing"].includes(order.status)) {
+          // Pre-shipment refund: cancel order through service FSM (restores stock & releases coupons)
+          await this.orderService.updateOrderStatus(
+            {
+              orderId: order.id,
+              status: "cancelled",
+              note: `Full refund of PKR ${totalRefundedOnOrder.toFixed(2)} issued: ${input.reason}`,
+            },
+            admin,
+            tx
+          );
+        } else if (["shipped", "delivered"].includes(order.status)) {
+          // Terminal refund through service FSM
+          await this.orderService.updateOrderStatus(
+            {
+              orderId: order.id,
+              status: "refunded",
+              note: `Full refund of PKR ${totalRefundedOnOrder.toFixed(2)} issued: ${input.reason}`,
+            },
+            admin,
+            tx
+          );
+          // Release coupons
+          await this.couponService.releaseOrderRedemption(order.id, tx, "order_refunded");
+
+          // If explicit restock requested for returned goods
+          if (input.restock) {
+            const orderDetails = await this.orderRepo.findById(order.id, tx);
+            if (orderDetails?.items) {
+              for (const item of orderDetails.items) {
+                if (item.variantId) {
+                  await this.invService.cancelOrderStock(
+                    item.variantId,
+                    item.quantity,
+                    order.id,
+                    true,
+                    admin.id,
+                    tx
+                  );
+                }
+              }
+            }
+          }
+        } else {
+          // Order already cancelled or refunded: record note in history
+          await this.orderRepo.addNote(
+            {
+              orderId: order.id,
+              body: `Full payment refund of PKR ${refundAmountNum.toFixed(2)} recorded. Reason: ${input.reason}`,
+              createdBy: admin.id,
+            },
+            tx
+          );
+        }
+      } else {
+        // Partial refund path: do NOT flip order status; record note in order notes/history
+        await this.orderRepo.addNote(
+          {
+            orderId: order.id,
+            body: `Partial payment refund of PKR ${refundAmountNum.toFixed(2)} recorded. Reason: ${input.reason}`,
+            createdBy: admin.id,
+          },
           tx
         );
       }
@@ -461,6 +653,8 @@ export class PaymentService {
 
   /**
    * Resets an order's payment status to pending / unpaid.
+   * Fully reverses stock commitment if order was confirmed/processing, and reverts order to awaiting_payment.
+   * Strictly requires administrator (admin or super_admin) role (BUG-011).
    */
   async markOrderPaymentPending(
     orderId: string,
@@ -470,33 +664,104 @@ export class PaymentService {
     assertRole(admin, ["admin"]);
 
     return db.transaction(async (tx) => {
+      // 1. Lock Order First (uniform lock order: 1. orders -> 2. payments -> 3. inventory)
       const order = await this.orderRepo.findForUpdate(orderId, tx);
       if (!order) throw new NotFoundError("Order", orderId);
+
+      // Guards
+      if (["cancelled", "refunded"].includes(order.status)) {
+        throw new ValidationError(`Cannot mark payment as pending on a ${order.status} order.`);
+      }
+      if (["shipped", "delivered"].includes(order.status)) {
+        throw new ValidationError("Delivered or shipped orders cannot be marked unpaid; use a refund.");
+      }
 
       let payment: Payment | null = null;
       if (details.paymentId) {
         payment = await this.paymentRepo.findForUpdate(details.paymentId, tx);
       } else {
+        // Deterministically pick the latest payment
         const orderPayments = await this.paymentRepo.findByOrderId(orderId, tx);
         if (orderPayments.length > 0) {
-          payment = await this.paymentRepo.findForUpdate(orderPayments[0].id, tx);
+          const sorted = [...orderPayments].sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          payment = await this.paymentRepo.findForUpdate(sorted[0].id, tx);
         }
       }
 
-      if (payment) {
-        return this.paymentRepo.update(
-          payment.id,
+      if (!payment) {
+        return null;
+      }
+
+      if (payment.status === "refunded") {
+        throw new ValidationError("Cannot mark a refunded payment as pending.");
+      }
+      if (payment.status === "pending") {
+        return payment;
+      }
+
+      const noteText = details.note || "Payment marked as unpaid (administrative correction).";
+      const now = new Date();
+
+      // If order is confirmed or processing, reverse stock commitment and return order to awaiting_payment
+      if (["confirmed", "processing"].includes(order.status)) {
+        const orderDetails = await this.orderRepo.findById(order.id, tx);
+        if (orderDetails?.items) {
+          for (const item of orderDetails.items) {
+            if (item.variantId) {
+              await this.invService.cancelOrderStock(
+                item.variantId,
+                item.quantity,
+                order.id,
+                true,
+                admin.id,
+                tx
+              );
+            }
+          }
+        }
+
+        // Transition order back to awaiting_payment
+        await this.orderService.updateOrderStatus(
           {
-            status: "pending",
-            paidAt: null,
-            verifiedAt: null,
-            verifiedBy: null,
+            orderId: order.id,
+            status: "awaiting_payment",
+            note: noteText,
           },
+          admin,
           tx
         );
       }
 
-      return null;
+      const existingMetadata = payment.metadata || {};
+      const correctionsHistory = [
+        ...(existingMetadata.corrections || []),
+        {
+          by: admin.id,
+          at: now.toISOString(),
+          from: payment.status,
+          to: "pending",
+          note: noteText,
+        },
+      ];
+
+      const updatedPayment = await this.paymentRepo.update(
+        payment.id,
+        {
+          status: "pending",
+          paidAt: null,
+          verifiedAt: null,
+          verifiedBy: null,
+          metadata: {
+            ...existingMetadata,
+            corrections: correctionsHistory,
+          },
+        },
+        tx
+      );
+
+      return updatedPayment!;
     });
   }
 }

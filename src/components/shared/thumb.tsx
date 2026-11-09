@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { cn } from "../../lib/utils";
+import { cn, isAllowedImageHost } from "../../lib/utils";
 
 export function ProductThumb({
   src,
@@ -7,7 +7,7 @@ export function ProductThumb({
   size = "md",
   className,
 }: {
-  src: string;
+  src?: string | null;
   alt: string;
   size?: "sm" | "md" | "lg" | "xl";
   className?: string;
@@ -21,18 +21,24 @@ export function ProductThumb({
   return (
     <div
       className={cn(
-        "relative shrink-0 overflow-hidden border border-line bg-surface-muted",
+        "relative shrink-0 overflow-hidden border border-line bg-surface-muted flex items-center justify-center",
         sizes[size],
         className,
       )}
     >
-      <Image
-        src={src}
-        alt={alt}
-        fill
-        sizes="(max-width: 768px) 100vw, 96px"
-        className="object-cover"
-      />
+      {src && isAllowedImageHost(src) ? (
+        <Image
+          src={src}
+          alt={alt}
+          fill
+          sizes="(max-width: 768px) 100vw, 96px"
+          className="object-cover"
+        />
+      ) : (
+        <span className="text-[10px] font-medium text-ink-muted select-none">
+          {alt.slice(0, 2).toUpperCase() || "SX"}
+        </span>
+      )}
     </div>
   );
 }

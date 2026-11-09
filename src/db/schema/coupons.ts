@@ -7,6 +7,7 @@ import {
   integer,
   numeric,
   index,
+  uniqueIndex,
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -46,7 +47,8 @@ export const coupons = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index("idx_coupons_code").on(table.code),
+    uniqueIndex("uq_coupons_code_upper").on(sql`upper(${table.code})`),
+    check("chk_coupons_code_upper", sql`${table.code} = upper(${table.code})`),
     check("chk_coupons_discount_value", sql`${table.discountValue} > 0`),
     check(
       "chk_coupons_percentage_cap",

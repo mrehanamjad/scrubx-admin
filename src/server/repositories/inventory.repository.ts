@@ -592,7 +592,7 @@ export class InventoryRepository {
     data: {
       variantId: string;
       change: number;
-      reason: "restock" | "sale" | "cancellation" | "adjustment" | "return";
+      reason: "restock" | "sale" | "cancellation" | "adjustment" | "return" | "correction";
       orderId?: string | null;
       createdBy?: string | null;
     },

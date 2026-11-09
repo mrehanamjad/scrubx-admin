@@ -45,6 +45,7 @@ import { PageHeader } from "../components/shared/page-header";
 import { EmptyState } from "../components/shared/empty-state";
 import { ConfirmDialog } from "../components/shared/confirm-dialog";
 import { SearchInput } from "../components/shared/search-input";
+import { Pagination } from "../components/shared/pagination";
 import { useToast } from "../components/ui/toast";
 import { formatDate, formatPKR } from "../lib/format";
 import { cn, uid } from "../lib/utils";
@@ -58,9 +59,18 @@ import {
 
 interface CouponsProps {
   initialCoupons?: Coupon[];
+  initialPagination?: {
+    totalItems: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  };
 }
 
-export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
+export default function CouponsPage({
+  initialCoupons = [],
+  initialPagination,
+}: CouponsProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [coupons, setCoupons] = useState<Coupon[]>(initialCoupons);
@@ -75,6 +85,8 @@ export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Coupon | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [page, setPage] = useState(initialPagination?.currentPage ?? 1);
+  const [pageSize, setPageSize] = useState(initialPagination?.limit ?? 20);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -299,6 +311,7 @@ export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="scheduled">Scheduled</SelectItem>
                 <SelectItem value="expired">Expired</SelectItem>
                 <SelectItem value="inactive">Inactive</SelectItem>
               </SelectContent>
@@ -314,7 +327,8 @@ export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
               action={<Button onClick={openCreate}>Create coupon</Button>}
             />
           ) : (
-            <Table>
+            <>
+              <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Code</TableHead>
@@ -366,6 +380,8 @@ export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
                         variant={
                           coupon.status === "active"
                             ? "success"
+                            : coupon.status === "scheduled"
+                            ? "info"
                             : coupon.status === "expired"
                             ? "neutral"
                             : "warning"
@@ -373,6 +389,8 @@ export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
                       >
                         {coupon.status === "active"
                           ? "Active"
+                          : coupon.status === "scheduled"
+                          ? "Scheduled"
                           : coupon.status === "expired"
                           ? "Expired"
                           : "Inactive"}
@@ -406,6 +424,25 @@ export default function CouponsPage({ initialCoupons = [] }: CouponsProps) {
                 ))}
               </TableBody>
             </Table>
+            <Pagination
+              page={initialPagination ? initialPagination.currentPage : page}
+              pageSize={initialPagination ? initialPagination.limit : pageSize}
+              total={initialPagination ? initialPagination.totalItems : filtered.length}
+              onPageChange={(newPage) => {
+                setPage(newPage);
+                if (initialPagination) {
+                  router.push(`?page=${newPage}&limit=${pageSize}`);
+                }
+              }}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+                if (initialPagination) {
+                  router.push(`?page=1&limit=${size}`);
+                }
+              }}
+            />
+          </>
           )}
         </CardContent>
       </Card>

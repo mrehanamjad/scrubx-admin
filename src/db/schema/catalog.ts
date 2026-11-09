@@ -116,6 +116,7 @@ export const productVariants = pgTable(
     unique("uq_product_variants_combo").on(table.productId, table.colorId, table.size),
     index("idx_product_variants_product_id").on(table.productId),
     index("idx_product_variants_color_id").on(table.colorId),
+    index("idx_variants_product_price").on(table.productId, table.price),
     check("chk_product_variants_price", sql`${table.price} >= 0`),
     check(
       "chk_product_variants_compare_price",
@@ -134,7 +135,7 @@ export const productImages = pgTable(
     colorId: uuid("color_id").references(() => productColors.id, {
       onDelete: "cascade",
     }),
-    imagekitFileId: text("imagekit_file_id").notNull().unique(),
+    imagekitFileId: text("imagekit_file_id"),
     url: text("url").notNull(),
     thumbnailUrl: text("thumbnail_url"),
     altText: text("alt_text"),
@@ -143,6 +144,7 @@ export const productImages = pgTable(
   },
   (table) => [
     index("idx_product_images_lookup").on(table.productId, table.colorId, table.sortOrder),
+    index("idx_product_images_file_id").on(table.imagekitFileId),
     check("chk_product_images_sort_order", sql`${table.sortOrder} >= 0`),
   ]
 );

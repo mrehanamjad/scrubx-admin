@@ -4,6 +4,7 @@ import type { OrderStatus, PaymentStatus, ProductStatus } from "../../lib/types"
 import { ORDER_STATUS_LABEL } from "../../lib/constants";
 
 const orderVariant: Record<OrderStatus, "neutral" | "brand" | "navy" | "success" | "warning" | "danger" | "info" | "purple"> = {
+  pending: "purple",
   awaiting_payment: "warning",
   payment_submitted: "info",
   pending_cod: "purple",

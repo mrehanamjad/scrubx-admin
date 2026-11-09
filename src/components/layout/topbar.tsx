@@ -59,12 +59,16 @@ function resolveMeta(pathname: string) {
   return { title: "ScrubX Admin", subtitle: "" };
 }
 
+import { markNotificationReadAction } from "../../actions/settings";
+
 export interface LayoutNotification {
   id: string;
+  key?: string;
   title: string;
   body: string;
   at: string;
   to: string;
+  isRead?: boolean;
 }
 
 export function Topbar({
@@ -96,7 +100,13 @@ export function Topbar({
     const q = query.trim();
     if (q) {
       setSearchOpen(false);
-      router.push(`/products?q=${encodeURIComponent(q)}`);
+      if (pathname.startsWith("/orders")) {
+        router.push(`/orders?q=${encodeURIComponent(q)}`);
+      } else if (pathname.startsWith("/customers")) {
+        router.push(`/customers?q=${encodeURIComponent(q)}`);
+      } else {
+        router.push(`/products?q=${encodeURIComponent(q)}`);
+      }
     }
   };
 
@@ -198,7 +208,7 @@ export function Topbar({
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="icon" className="relative" aria-label="Notifications">
             <Bell className="h-4 w-4" />
-            {notifications.length > 0 && (
+            {notifications.some((n) => !n.isRead) && (
               <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white" />
             )}
           </Button>
@@ -206,7 +216,9 @@ export function Topbar({
         <DropdownMenuContent align="end" className="w-[340px] p-0">
           <div className="flex items-center justify-between border-b border-line px-3 py-2.5">
             <p className="text-[13px] font-semibold text-ink">Notifications</p>
-            <Badge variant="neutral">{notifications.length}</Badge>
+            <Badge variant="neutral">
+              {notifications.filter((n) => !n.isRead).length} new
+            </Badge>
           </div>
           <div className="max-h-[320px] overflow-y-auto scrollbar-thin">
             {notifications.length === 0 ? (
@@ -216,7 +228,17 @@ export function Topbar({
             ) : (
               notifications.map((n) => (
                 <DropdownMenuItem key={n.id} asChild className="items-start p-0">
-                  <Link href={n.to} className="flex w-full items-start gap-2.5 px-3 py-2.5">
+                  <Link
+                    href={n.to}
+                    onClick={() => {
+                      if (n.key && !n.isRead) {
+                        markNotificationReadAction({ key: n.key }).catch(() => {});
+                      }
+                    }}
+                    className={`flex w-full items-start gap-2.5 px-3 py-2.5 ${
+                      !n.isRead ? "bg-brand-50/40" : ""
+                    }`}
+                  >
                     <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600">
                       {n.to === "/payments" ? (
                         <CreditCard className="h-3.5 w-3.5" />
@@ -225,10 +247,17 @@ export function Topbar({
                       )}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium text-ink">{n.title}</span>
+                      <span className={`block truncate text-[13px] ${!n.isRead ? "font-bold text-ink" : "font-medium text-ink-soft"}`}>
+                        {n.title}
+                      </span>
                       <span className="block truncate text-[12px] text-ink-muted">{n.body}</span>
                     </span>
-                    <span className="shrink-0 text-[11px] text-ink-muted">{relativeTime(n.at)}</span>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className="text-[11px] text-ink-muted">{relativeTime(n.at)}</span>
+                      {!n.isRead && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-brand-600" />
+                      )}
+                    </div>
                   </Link>
                 </DropdownMenuItem>
               ))
@@ -286,11 +315,13 @@ export function MobileNav({
   onClose,
   pendingPayments = 0,
   lowStock = 0,
+  userRole,
 }: {
   open: boolean;
   onClose: () => void;
   pendingPayments?: number;
   lowStock?: number;
+  userRole?: string;
 }) {
   return (
     <div
@@ -328,6 +359,7 @@ export function MobileNav({
             onNavigate={onClose}
             pendingPayments={pendingPayments}
             lowStock={lowStock}
+            userRole={userRole}
           />
         </div>
       </aside>

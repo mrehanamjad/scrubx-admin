@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { SearchX, UserRound, Users } from "lucide-react";
 import { Card, CardContent } from "../components/ui/card";
@@ -37,6 +38,13 @@ interface CustomersProps {
   initialRegisteredCount?: number;
   initialGuestCount?: number;
   initialLifetimeValue?: number;
+  initialPagination?: {
+    totalItems: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  };
+  initialQuery?: string;
 }
 
 export default function CustomersPage({
@@ -45,14 +53,26 @@ export default function CustomersPage({
   initialRegisteredCount = 0,
   initialGuestCount = 0,
   initialLifetimeValue = 0,
+  initialPagination,
+  initialQuery = "",
 }: CustomersProps) {
+  const router = useRouter();
   const [customers, setCustomers] = useState<Customer[]>(initialCustomers);
 
   useEffect(() => {
     setCustomers(initialCustomers);
   }, [initialCustomers]);
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
+  const handleSearchSubmit = () => {
+    const q = query.trim();
+    router.replace(q ? `/customers?q=${encodeURIComponent(q)}` : "/customers");
+  };
   const [type, setType] = useState<"all" | "registered" | "guest">("all");
   const [sort, setSort] = useState<SortKey>("newest");
   const [page, setPage] = useState(1);
@@ -163,6 +183,7 @@ export default function CustomersPage({
                 setQuery(value);
                 setPage(1);
               }}
+              onSubmit={handleSearchSubmit}
               placeholder="Search by name, email, phone or city…"
               className="w-full lg:max-w-xs"
             />
@@ -274,13 +295,21 @@ export default function CustomersPage({
                 </TableBody>
               </Table>
               <Pagination
-                page={safePage}
-                pageSize={pageSize}
-                total={filtered.length}
-                onPageChange={setPage}
+                page={initialPagination ? initialPagination.currentPage : safePage}
+                pageSize={initialPagination ? initialPagination.limit : pageSize}
+                total={initialPagination ? initialPagination.totalItems : filtered.length}
+                onPageChange={(newPage) => {
+                  setPage(newPage);
+                  if (initialPagination) {
+                    router.push(`?page=${newPage}&limit=${pageSize}`);
+                  }
+                }}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
                   setPage(1);
+                  if (initialPagination) {
+                    router.push(`?page=1&limit=${size}`);
+                  }
                 }}
               />
             </>

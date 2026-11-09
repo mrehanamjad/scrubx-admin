@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, ne, or, sql, count } from "drizzle-orm";
+import { and, desc, eq, ilike, ne, or, sql, count, isNull } from "drizzle-orm";
 import { db } from "../../db/index.ts";
 import { coupons } from "../../db/schema/coupons.ts";
 import { orders, orderCoupons } from "../../db/schema/orders.ts";
@@ -60,10 +60,22 @@ export class CouponRepository {
       );
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-    const now = new Date();
+    // BUG-030 & PERF-004: Express derived status in SQL for server-side filtering, counting, and pagination
+    const statusCaseExpr = sql<CouponStatus>`
+      CASE
+        WHEN ${coupons.isActive} = false THEN 'inactive'
+        WHEN ${coupons.startsAt} > now() THEN 'scheduled'
+        WHEN ${coupons.expiresAt} IS NOT NULL AND ${coupons.expiresAt} <= now() THEN 'expired'
+        ELSE 'active'
+      END
+    `;
 
-    // Query all matching for accurate total and status evaluation
+    if (filter.status && filter.status !== "all") {
+      conditions.push(sql`${statusCaseExpr} = ${filter.status}`);
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
     const orderColumn =
       filter.sortBy === "code"
         ? coupons.code
@@ -77,26 +89,31 @@ export class CouponRepository {
 
     const orderExpr = filter.sortOrder === "asc" ? sql`${orderColumn} ASC NULLS LAST` : sql`${orderColumn} DESC NULLS LAST`;
 
-    const allRows = await executor
-      .select()
+    // 1. Total count in SQL
+    const [countResult] = await executor
+      .select({ count: sql<number>`cast(count(${coupons.id}) as integer)` })
+      .from(coupons)
+      .where(whereClause);
+
+    const total = Number(countResult?.count) || 0;
+    const offset = (filter.page - 1) * filter.limit;
+
+    // 2. Bounded paged rows in SQL
+    const rows = await executor
+      .select({
+        coupon: coupons,
+        computedStatus: statusCaseExpr,
+      })
       .from(coupons)
       .where(whereClause)
-      .orderBy(orderExpr);
+      .orderBy(orderExpr)
+      .limit(filter.limit)
+      .offset(offset);
 
-    // Apply status filter in-memory with exact timestamp evaluation
-    const filteredRows = allRows
-      .map((row) => ({
-        ...row,
-        computedStatus: this.deriveStatus(row, now),
-      }))
-      .filter((row) => {
-        if (filter.status === "all") return true;
-        return row.computedStatus === filter.status;
-      });
-
-    const total = filteredRows.length;
-    const offset = (filter.page - 1) * filter.limit;
-    const paginatedItems = filteredRows.slice(offset, offset + filter.limit);
+    const paginatedItems: CouponListItem[] = rows.map((r) => ({
+      ...r.coupon,
+      computedStatus: r.computedStatus,
+    }));
 
     return buildPaginatedResult(paginatedItems, total, filter.page, filter.limit);
   }
@@ -209,6 +226,7 @@ export class CouponRepository {
         and(
           eq(orderCoupons.couponId, couponId),
           eq(orders.customerId, customerId),
+          isNull(orderCoupons.releasedAt),
           ne(orders.status, "cancelled")
         )
       );
@@ -253,6 +271,42 @@ export class CouponRepository {
       .update(coupons)
       .set({ usageCount: sql`${coupons.usageCount} + 1` })
       .where(eq(coupons.id, couponId));
+  }
+
+  /**
+   * Reverses a coupon redemption when an order is cancelled or refunded (BUG-007, DB-007).
+   * Sets releasedAt = now(), releaseReason, and decrements usage_count by 1 atomically.
+   * Idempotent: does nothing if order_coupons row is already released or missing.
+   */
+  async releaseRedemption(
+    orderId: string,
+    tx: DatabaseExecutor,
+    reason: "order_cancelled" | "order_refunded" | "admin_correction" = "order_cancelled"
+  ): Promise<boolean> {
+    const [existingUsage] = await tx
+      .select({ couponId: orderCoupons.couponId })
+      .from(orderCoupons)
+      .where(and(eq(orderCoupons.orderId, orderId), isNull(orderCoupons.releasedAt)))
+      .limit(1);
+
+    if (!existingUsage) {
+      return false;
+    }
+
+    await tx
+      .update(orderCoupons)
+      .set({
+        releasedAt: new Date(),
+        releaseReason: reason,
+      })
+      .where(and(eq(orderCoupons.orderId, orderId), isNull(orderCoupons.releasedAt)));
+
+    await tx
+      .update(coupons)
+      .set({ usageCount: sql`GREATEST(${coupons.usageCount} - 1, 0)` })
+      .where(eq(coupons.id, existingUsage.couponId));
+
+    return true;
   }
 
   /**

@@ -75,15 +75,17 @@ flowchart TD
         UI -->|"5. Update state & forms with { url, fileId }"| UI
     end
 
-    subgraph ServerLifecycle ["Server Actions & Deletion Pipeline"]
-        FormAction["Product / Category Form Deletion"]
-        MediaAction["deleteMediaAction(fileId)\n(src/actions/media.ts)"]
+    subgraph ServerLifecycle ["Domain-Scoped Deletion & Post-Commit Purge Pipeline"]
+        FormSave["Product / Category Form Mutation Commit"]
+        DetachAction["detachProductImageAction({ productId, imageId })\n(src/actions/products.ts)"]
+        DomainService["ProductService / CategoryService (Post-Commit Hook)"]
         SDK["ImageKit SDK Singleton\n(src/lib/imagekit.ts)"]
         IK_REST["https://api.imagekit.io/v1/files/{fileId}"]
         
-        FormAction -->|"Background or User purge"| MediaAction
-        MediaAction -->|"Require staff/admin role"| SDK
-        SDK -->|"DELETE file"| IK_REST
+        DetachAction -->|"1. Requires admin role, verifies ownership in DB"| DomainService
+        FormSave -->|"1. DB transaction commits successfully"| DomainService
+        DomainService -->|"2. safeDeleteImageKitFile(fileId) runs post-commit"| SDK
+        SDK -->|"3. DELETE file"| IK_REST
     end
 
     subgraph EdgeCDN ["Edge CDN Transformations"]
@@ -105,17 +107,18 @@ flowchart TD
    - Exports `getImageKitInstance()` and `imagekit` instance with full SDK methods (`upload`, `deleteFile`, `getAuthenticationParameters`).
 2. **`src/app/api/upload/auth/route.ts`**:
    - Next.js dynamic Route Handler (`export const dynamic = "force-dynamic"`).
-   - Protected with `requireStaff()` to prevent anonymous signature farming.
+   - Protected with `requireStaffContext({ redirect: false })` to prevent anonymous signature farming.
+   - Enforces rate limiting (30 signature requests / 10 min / user) and validates destination folders via `imageFolderSchema`.
    - Generates `{ token, expire, signature }` using official ImageKit SDK.
 3. **`src/actions/media.ts`**:
    - `'use server'` Server Actions.
-   - `deleteMediaAction(fileId: string)`: Enforces `requireAdmin()`, calls `imagekit.deleteFile(fileId)`.
-   - `uploadServerMediaAction(formData: FormData)`: Admin server fallback for automated imports. Validates MIME type and 5MB size limit.
+   - Arbitrary client `deleteMediaAction` removed (SEC-009). Domain deletions use `detachProductImageAction` or `ProductService` post-commit purging.
+   - `uploadServerMediaAction(formData: FormData, folder)`: Staff/Admin server fallback for automated imports. Validates MIME type (raster only: JPEG, PNG, WebP, AVIF; SVG prohibited for XSS prevention per SEC-006), 5MB size limit, and binary magic bytes per SEC-007.
 
 ### Client Helpers & UI Components
 1. **`src/lib/imagekit-upload.ts`**:
    - Client-side helper `uploadToImageKit(file, options)`.
-   - Fetches upload tokens from `/api/upload/auth`.
+   - Fetches upload tokens from `/api/upload/auth` with validated folder parameters.
    - Uses `XMLHttpRequest` for real-time `onProgress` upload progress tracking (0% to 100%).
    - Returns typed `UploadedFileResult` (`fileId`, `url`, `thumbnailUrl`, `name`, `size`, `filePath`).
 2. **`src/lib/imagekit-url.ts`**:
@@ -133,15 +136,17 @@ flowchart TD
      - Live progress bar per uploading item.
      - Color swatch tagging for product photos (`colorOptions`, `selectedColorId`, `onColorChange`).
      - Manual URL input toggle for backward compatibility and mock asset testing.
-     - Single preview with ImageKit Managed badge and deletion trigger.
-     - File size restrictions (default 5MB) and MIME validation (`image/jpeg`, `image/png`, `image/webp`, `image/avif`, `image/svg+xml`).
+     - Single preview with ImageKit Managed badge.
+     - File size restrictions (default 5MB) and strict raster MIME validation (`image/jpeg`, `image/png`, `image/webp`, `image/avif`).
+     - Image removal updates local form draft state only; never executes immediate remote deletions (BUG-017 / SEC-009).
 
 ### Admin View Integrations
 1. **`src/views/ProductForm.tsx`**:
-   - Replaced static input with `<ImageUpload folder="/scrubx/products" multiple={true} ... />`.
+   - `<ImageUpload folder="/scrubx/products" multiple={true} ... />`.
    - Automatically tags uploaded photos with the selected variant color or "Shared".
    - Displays "IK" badge on ImageKit-managed thumbnails.
-   - Deleting an image calls `deleteMediaAction(target.fileId)` in the background.
+   - Removing an image only mutates local component state until the form is saved, preventing accidental or premature asset deletion.
+   - Detaching saved images from existing products is performed server-side via `detachProductImageAction`.
    - Preserves manual URL input and mock library presets for zero disruption to development.
 2. **`src/views/Categories.tsx`**:
    - Integrated `<ImageUpload folder="/scrubx/categories" multiple={false} ... />` into `CategoryDialog`.

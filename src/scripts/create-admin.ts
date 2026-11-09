@@ -25,11 +25,25 @@ async function createAdmin() {
 
   const email = (process.env.ADMIN_EMAIL || "admin@scrubx.pk").trim().toLowerCase();
   const name = (process.env.ADMIN_NAME || "Ayesha Rehman").trim();
-  const password = process.env.ADMIN_PASSWORD || "Admin@ScrubX2026!";
+  const password = process.env.ADMIN_PASSWORD;
   const role = (process.env.ADMIN_ROLE || "super_admin").trim().toLowerCase();
 
-  if (password.length < 8) {
-    console.error("Error: Admin password must be at least 8 characters long.");
+  const VALID_ADMIN_ROLES = ["super_admin", "admin", "staff"] as const;
+  if (!VALID_ADMIN_ROLES.includes(role as (typeof VALID_ADMIN_ROLES)[number])) {
+    console.error(
+      `Error: Invalid ADMIN_ROLE '${role}'. Must be one of: ${VALID_ADMIN_ROLES.join(", ")}.`
+    );
+    process.exit(1);
+  }
+
+  if (!password || password.trim().length === 0) {
+    console.error("Error: ADMIN_PASSWORD environment variable is required and must not be empty.");
+    console.error("Please set ADMIN_PASSWORD in your environment (minimum 12 characters).");
+    process.exit(1);
+  }
+
+  if (password.length < 12) {
+    console.error("Error: ADMIN_PASSWORD must be at least 12 characters long.");
     process.exit(1);
   }
 

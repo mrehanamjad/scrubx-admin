@@ -12,11 +12,32 @@ export const metadata: Metadata = {
   description: "Track variant stock levels, low-stock warnings, and historical movements.",
 };
 
-export default async function Page() {
+interface PageProps {
+  searchParams: Promise<{
+    page?: string;
+    limit?: string;
+    q?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: string;
+  }>;
+}
+
+export default async function Page({ searchParams }: PageProps) {
   const admin = await requireStaffContext();
+  const sp = await searchParams;
+
+  const page = Math.max(1, Number(sp?.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(sp?.limit) || 20));
 
   let initialRows: any[] = [];
   let initialMovements: any[] = [];
+  let pagination = {
+    totalItems: 0,
+    totalPages: 1,
+    currentPage: page,
+    limit,
+  };
   let initialTotals = {
     units: 0,
     value: 0,
@@ -28,11 +49,27 @@ export default async function Page() {
 
   try {
     const [inventoryResult, summary, movementsResult] = await Promise.all([
-      inventoryService.getInventory({ limit: 100 }, admin),
+      inventoryService.getInventory(
+        {
+          page,
+          limit,
+          q: typeof sp?.q === "string" ? sp.q : undefined,
+          status: (sp?.status as any) || undefined,
+          sortBy: (sp?.sortBy as any) || "updatedAt",
+          sortOrder: sp?.sortOrder === "asc" ? "asc" : "desc",
+        },
+        admin
+      ),
       inventoryService.getInventorySummary(admin),
       inventoryService.getMovements({ limit: 50 }, admin),
     ]);
 
+    pagination = {
+      totalItems: inventoryResult.pagination.totalItems,
+      totalPages: inventoryResult.pagination.totalPages,
+      currentPage: inventoryResult.pagination.page,
+      limit: inventoryResult.pagination.limit,
+    };
     initialRows = inventoryResult.items.map((item) => ({
       product: {
         id: item.product.id,
@@ -101,6 +138,7 @@ export default async function Page() {
       initialRows={initialRows}
       initialMovements={initialMovements}
       initialTotals={initialTotals}
+      initialPagination={pagination}
     />
   );
 }

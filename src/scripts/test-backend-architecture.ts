@@ -301,7 +301,7 @@ async function runBackendTests() {
         amount: pricePkrSchema,
         note: z.string().min(3),
       }),
-      requiredRole: null, // Allow direct invocation for pipeline verification
+      requiredRole: "staff",
     },
     async ({ input, admin }) => {
       return {
@@ -311,29 +311,35 @@ async function runBackendTests() {
     }
   );
 
-  // 6.1 Successful execution
-  const actionSuccess = await testProtectedAction({
+  // 6.1 Unauthenticated execution rejection (ARCH-003: no fabricated anonymous principal)
+  const actionUnauth = await testProtectedAction({
     amount: 500,
     note: "Valid payment note",
   });
   assert(
-    actionSuccess.success === true && actionSuccess.data?.confirmedAmount === 500,
-    "createSafeAction handles valid payload and returns ActionResponse"
+    actionUnauth.success === false &&
+      (actionUnauth.code === "UNAUTHORIZED" || actionUnauth.code === "AUTHENTICATION_ERROR"),
+    "createSafeAction rejects unauthenticated invocation without session (ARCH-003)"
   );
 
-  // 6.2 Zod validation rejection
-  const actionValidationFail = await testProtectedAction({
+  // 6.2 Zod validation rejection and structured fieldErrors serialization
+  const actionSchema = z.object({
+    amount: pricePkrSchema,
+    note: z.string().min(3),
+  });
+  const parseResult = await actionSchema.safeParseAsync({
     amount: -100, // Invalid negative
     note: "ab", // Too short
   });
-  assert(
-    actionValidationFail.success === false && actionValidationFail.code === "VALIDATION_ERROR",
-    "createSafeAction catches validation errors and returns structured failure"
-  );
-  assert(
-    Boolean(actionValidationFail.fieldErrors?.amount && actionValidationFail.fieldErrors?.note),
-    "createSafeAction attaches fieldErrors map for all failing fields"
-  );
+  assert(!parseResult.success, "Action schema rejects invalid negative price and short note");
+  if (!parseResult.success) {
+    const serialized = toActionError(parseResult.error);
+    assert(
+      serialized.code === "VALIDATION_ERROR" &&
+        Boolean(serialized.fieldErrors?.amount && serialized.fieldErrors?.note),
+      "toActionError formats validation errors with structured fieldErrors map"
+    );
+  }
 
   console.log("\n═══════════════════════════════════════════════════════════");
   console.log(` Summary: ${passed} Passed, ${failed} Failed`);

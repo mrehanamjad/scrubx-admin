@@ -5,6 +5,8 @@ import { ValidationError } from "../errors.ts";
 import { storeSettingsValueSchemas } from "../../db/schema/json-schemas.ts";
 import type { StoreSettingKey, StoreSettingsMap } from "../../db/schema/json-types.ts";
 import type { DatabaseExecutor } from "../repositories/base.repository.ts";
+import { validateStoreSetting } from "../../lib/store-settings-registry.ts";
+import { recordAuditLog } from "../audit.ts";
 
 // Default settings dictionary if database has not yet been seeded with rows
 const DEFAULT_SETTINGS: Partial<StoreSettingsMap> = {
@@ -74,16 +76,33 @@ export class SettingsService {
 
   /**
    * Updates a single store setting.
-   * Strictly requires administrator (admin or super_admin) privileges.
+   * Strictly requires Super Administrator (super_admin) privileges (SEC-013).
    */
   async updateSetting<K extends StoreSettingKey>(
     key: K,
     value: StoreSettingsMap[K],
     admin: AdminContext
   ) {
-    assertRole(admin, ["admin"]);
+    assertRole(admin, ["super_admin"]);
 
+    const validation = validateStoreSetting(key, value, { allowUnknown: true });
+    if (!validation.valid) {
+      throw new ValidationError(validation.error || `Invalid value for setting '${key}'`);
+    }
+
+    const previousValue = await this.repo.getSettingByKey(key);
     const updated = await this.repo.upsertSetting(key, value, admin.id);
+
+    await recordAuditLog({
+      admin,
+      action: "store_setting.update",
+      entityType: "store_setting",
+      entityId: key,
+      before: previousValue !== null ? { [key]: previousValue } : null,
+      after: { [key]: value },
+      metadata: { key },
+    });
+
     return {
       key: updated.key as K,
       value: updated.value as StoreSettingsMap[K],
@@ -94,13 +113,13 @@ export class SettingsService {
 
   /**
    * Atomically updates multiple store settings in a single transaction.
-   * Strictly requires administrator (admin or super_admin) privileges.
+   * Strictly requires Super Administrator (super_admin) privileges (SEC-013).
    */
   async updateSettingsBatch(
     settings: Partial<StoreSettingsMap>,
     admin: AdminContext
   ): Promise<Partial<StoreSettingsMap>> {
-    assertRole(admin, ["admin"]);
+    assertRole(admin, ["super_admin"]);
 
     const entriesToUpsert: Array<{ key: StoreSettingKey; value: any; updatedById?: string }> = [];
 
@@ -121,6 +140,11 @@ export class SettingsService {
         );
       }
 
+      const regValidation = validateStoreSetting(key, rawVal, { allowUnknown: true });
+      if (!regValidation.valid) {
+        throw new ValidationError(regValidation.error || `Invalid value for setting '${key}'`);
+      }
+
       entriesToUpsert.push({
         key,
         value: parseRes.data,
@@ -132,10 +156,21 @@ export class SettingsService {
       return this.getAllSettings(admin);
     }
 
-    return db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       await this.repo.upsertSettingsBatch(entriesToUpsert, tx);
       return this.getAllSettings(admin, tx);
     });
+
+    await recordAuditLog({
+      admin,
+      action: "store_settings.batch_update",
+      entityType: "store_settings",
+      entityId: "batch",
+      after: settings,
+      metadata: { keys: entriesToUpsert.map((e) => e.key) },
+    });
+
+    return result;
   }
 
   /**

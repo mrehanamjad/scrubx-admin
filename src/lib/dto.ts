@@ -194,15 +194,23 @@ export function toCustomerDTO(c: CustomerDetail | CustomerListItem): Customer {
     : [];
 
   const notesList =
-    typeof c.notes === "string" && c.notes.trim()
-      ? [
-          {
-            id: "note-root",
-            text: c.notes,
-            at: serializeDate(c.updatedAt || c.createdAt),
-          },
-        ]
-      : [];
+    "notesTimeline" in c && Array.isArray((c as any).notesTimeline) && (c as any).notesTimeline.length > 0
+      ? (c as any).notesTimeline.map((n: any) => ({
+          id: n.id,
+          text: n.body,
+          at: serializeDate(n.createdAt),
+          authorName: n.authorName || undefined,
+          isPinned: Boolean(n.isPinned),
+        }))
+      : typeof c.notes === "string" && c.notes.trim()
+        ? [
+            {
+              id: "note-root",
+              text: c.notes,
+              at: serializeDate(c.updatedAt || c.createdAt),
+            },
+          ]
+        : [];
 
   return {
     id: c.id,
@@ -214,6 +222,9 @@ export function toCustomerDTO(c: CustomerDetail | CustomerListItem): Customer {
     registeredAt: serializeDate(c.createdAt),
     addresses: customerAddresses,
     notes: notesList,
+    ordersCount: "ordersCount" in c ? serializeNumber(c.ordersCount) : undefined,
+    totalSpend: "totalSpend" in c ? serializeNumber(c.totalSpend) : undefined,
+    lastOrderDate: "lastOrderDate" in c && c.lastOrderDate ? serializeDate(c.lastOrderDate) : undefined,
   };
 }
 
@@ -244,7 +255,17 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
 
   const items: OrderItem[] = "items" in order && Array.isArray((order as any).items)
     ? (order as any).items.map((item: any) => {
-        const eng = item.engravings?.[0];
+        const allEngravings = Array.isArray(item.engravings)
+          ? item.engravings.map((eng: any) => ({
+              optionId: eng.engravingOptionId || "",
+              optionName: eng.text ? "Name Engraving" : "Logo Engraving",
+              type: (eng.text ? "name" : "logo") as "name" | "logo",
+              text: eng.text || undefined,
+              logoUrl: eng.logoUrl || undefined,
+              price: serializeNumber(eng.price),
+            }))
+          : [];
+        const eng = allEngravings[0];
         return {
           id: item.id,
           productId: item.productId || "",
@@ -254,19 +275,11 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
           colorName: item.colorName || item.variantName?.split("/")[0]?.trim() || "",
           size: item.size || item.variantName?.split("/")[1]?.trim() || "",
           sku: item.sku,
-          image: item.imageUrl || "/products/scrubs-teal.jpg",
+          image: item.imageUrl || "",
           price: serializeNumber(item.unitPrice),
           quantity: item.quantity,
-          engraving: eng
-            ? {
-                optionId: eng.engravingOptionId || "",
-                optionName: eng.text ? "Name Engraving" : "Logo Engraving",
-                type: (eng.text ? "name" : "logo") as "name" | "logo",
-                text: eng.text || undefined,
-                logoUrl: eng.logoUrl || undefined,
-                price: serializeNumber(eng.price),
-              }
-            : undefined,
+          engraving: eng,
+          engravings: allEngravings,
         };
       })
     : [];
@@ -286,7 +299,7 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
         label: `Status changed to ${h.toStatus.replace(/_/g, " ")}`,
         at: serializeDate(h.createdAt),
         note: h.note || undefined,
-        by: "Admin",
+        by: h.changedBy === "system" ? "System" : (h.authorName || h.changedBy || "System"),
       }))
     : [];
 
@@ -317,9 +330,13 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
     customerName,
     customerEmail,
     customerPhone,
-    customerType: "registered",
+    customerType: Boolean(
+      ("customer" in order && (order as any).customer?.userId) ||
+      ("isRegistered" in order && (order as any).isRegistered)
+    ) ? "registered" : "guest",
     date: serializeDate(order.placedAt),
     items,
+    itemsCount: "itemsCount" in order ? Number((order as any).itemsCount) : items.reduce((s, i) => s + (i.quantity || 1), 0),
     subtotal: serializeNumber(order.subtotal),
     engravingCharges: serializeNumber(orderAny.engravingTotal ?? 0),
     discount: serializeNumber(orderAny.discountTotal ?? 0),
@@ -327,11 +344,19 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
     total: serializeNumber(order.total),
     status: order.status === "pending" ? "pending_cod" : (order.status as OrderStatus),
     paymentStatus,
-    paymentMethod: ("paymentMethod" in order && (order as any).paymentMethod?.code
-      ? ((order as any).paymentMethod.code as PaymentMethodId)
-      : ("paymentMethodName" in order && (order as any).paymentMethodName
-      ? ((order as any).paymentMethodName.toLowerCase() as PaymentMethodId)
-      : "bank")),
+    paymentMethod: (() => {
+      let raw = "bank";
+      if ("paymentMethod" in order && (order as any).paymentMethod?.code) {
+        raw = (order as any).paymentMethod.code;
+      } else if ("paymentMethodCode" in order && (order as any).paymentMethodCode) {
+        raw = (order as any).paymentMethodCode;
+      } else if ("paymentMethodName" in order && (order as any).paymentMethodName) {
+        raw = (order as any).paymentMethodName.toLowerCase();
+      }
+      if (raw === "bank_transfer" || raw.includes("bank")) return "bank" as PaymentMethodId;
+      if (raw === "cod" || raw.includes("cash")) return "cod" as PaymentMethodId;
+      return raw as PaymentMethodId;
+    })(),
     paymentMethodName: ("paymentMethod" in order && (order as any).paymentMethod?.name
       ? (order as any).paymentMethod.name
       : undefined),
@@ -343,6 +368,7 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
     verifiedAt: latestPayment?.verifiedAt ? serializeDate(latestPayment.verifiedAt) : undefined,
     rejectionReason: latestPayment?.rejectionReason || undefined,
     transactionRef: latestPayment?.transactionReference || undefined,
+    paymentDueAt: orderAny.paymentDueAt ? serializeDate(orderAny.paymentDueAt) : undefined,
     shippingAddress: {
       label: snapAddress.label || "Delivery Address",
       recipient: snapAddress.fullName || snapAddress.recipient || customerName,
@@ -366,8 +392,8 @@ export function toOrderDTO(order: OrderDetailBundle | OrderListItem): Order {
  */
 export function toPaymentSubmissionDTO(
   p: PaymentDetail | PaymentListItem,
-  orderNumber = "SX-1001",
-  customerName = "Customer",
+  orderNumber = "—",
+  customerName = "—",
   customerPhone = ""
 ): PaymentSubmission {
   const methodCode = "paymentMethod" in p && p.paymentMethod?.code
@@ -383,9 +409,9 @@ export function toPaymentSubmissionDTO(
     customerName: "customerName" in p && typeof (p as any).customerName === "string" ? (p as any).customerName : customerName,
     customerPhone: "customerPhone" in p && typeof (p as any).customerPhone === "string" ? (p as any).customerPhone : customerPhone,
     amount: serializeNumber(p.amount),
-    method: methodCode as PaymentMethodId,
-    transactionRef: p.transactionReference || "TRX-PENDING",
-    proofUrl: (p as any).proofUrl || (p as any).proofImageUrl || "/proofs/receipt-1.jpg",
+    method: (methodCode === "bank_transfer" ? "bank" : methodCode) as PaymentMethodId,
+    transactionRef: p.transactionReference || "—",
+    proofUrl: (p as any).proofUrl || (p as any).proofImageUrl || undefined,
     submittedAt: serializeDate(p.createdAt),
     status: p.status === "awaiting_verification"
       ? "submitted"
@@ -396,6 +422,8 @@ export function toPaymentSubmissionDTO(
       : "submitted",
     rejectionReason: p.rejectionReason || undefined,
     reviewedAt: p.verifiedAt ? serializeDate(p.verifiedAt) : undefined,
+    isDuplicate: Boolean((p as any).metadata?.duplicateReference),
+    duplicateRefDetails: (p as any).metadata?.duplicateReference || undefined,
   };
 }
 
@@ -417,7 +445,7 @@ export function toCouponDTO(c: CouponListItem): Coupon {
     startsAt: serializeDate(c.startsAt),
     expiresAt: c.expiresAt ? serializeDate(c.expiresAt) : "",
     usedCount: serializeNumber(c.usageCount),
-    status: c.computedStatus as "active" | "inactive" | "expired",
+    status: c.computedStatus,
   };
 }
 

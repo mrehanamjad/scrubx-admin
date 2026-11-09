@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import ProductFormPage from "@/views/ProductForm";
 import { productService } from "@/server/services/product.service";
 import { categoryService } from "@/server/services/category.service";
@@ -13,11 +14,15 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
+const getProductData = cache(async (id: string) => {
+  const admin = await requireStaffContext();
+  return productService.getProductById(id, admin);
+});
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params;
   try {
-    const admin = await requireStaffContext();
-    const product = await productService.getProductById(id, admin);
+    const product = await getProductData(id);
     return {
       title: `Edit ${product.name} | ScrubX`,
       description: "Update product listing and variants.",
@@ -39,7 +44,7 @@ export default async function Page({ params }: PageProps) {
 
   try {
     const [productBundle, rawCategories] = await Promise.all([
-      productService.getProductById(id, admin),
+      getProductData(id),
       categoryService.getAllCategories(admin, { tree: false }),
     ]);
 

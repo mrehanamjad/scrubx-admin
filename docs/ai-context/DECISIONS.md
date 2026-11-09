@@ -373,8 +373,9 @@ In ScrubX, order fulfillment involves concurrent operations across multiple tabl
 ### Decision
 1. **Global Consistent Lock Ordering:**
    All operations requiring multi-table locks must acquire row-level locks strictly in the following sequence:
-   $$\text{orders} \longrightarrow \text{payments} \longrightarrow \text{inventory}$$
+   $$\text{orders} \longrightarrow \text{payments} \longrightarrow \text{inventory} \longrightarrow \text{coupons}$$
    Acquiring locks in any other order is strictly prohibited.
+   **Intra-Table Deterministic Ordering (BUG-004):** Within any table, multi-row locks must be acquired in ascending primary-key order (e.g. `[...variantIds].sort()`). Multi-row operations must aggregate and sort entity keys before acquiring row locks to eliminate lock-cycle deadlocks between concurrent orders.
 2. **Distinct 4-Way Cancellation & Refund Semantics:**
    State transitions must clearly separate physical warehouse inventory from financial transaction records:
    - **Unpaid Order Cancellation:** Release reserved units back to available stock; physical stock unchanged; payment not involved.
@@ -451,5 +452,35 @@ Custom engraving requires upfront payment because personalized merchandise canno
 - Enforcing the COD engraving rule in the application layer prevents confusing database trigger exceptions and protects company cash flow from uncollectible personalized inventory.
 - Atomic reordering eliminates intermediate corrupted sorting states.
 - Passing the transaction executor to `getAllSettings` avoids stale reads of uncommitted settings within the same transaction.
+
+---
+
+## ADR 023: Single Authentication Stack, Strict Role Resolution, and Defense-in-Depth Session Guardrails
+
+### Context
+Previous implementations had two parallel authentication modules (`src/server/auth.ts` and `src/lib/auth-guard.ts`) with conflicting failure modes (throwing errors vs. issuing HTTP redirects). Crucially, unrecognized or missing roles (such as storefront users with `role = 'customer'`) were coerced to `'staff'`, allowing unauthorized principals to access internal administrative screens and operations. Additionally, proxy redirection on expired sessions led to infinite redirect loops.
+
+### Decision
+1. **Single Authoritative Auth Stack (`src/server/auth.ts`):**
+   - Retired `src/lib/auth-guard.ts` completely. All RSC pages, route handlers, and Server Actions use `src/server/auth.ts`.
+   - Pages use `requirePage(role)` or `require*Context({ redirect: true })` which redirects to `/login?error=session` or `/login?error=forbidden`.
+   - Server Actions and route handlers use context helpers with `{ redirect: false }` to avoid throwing `NEXT_REDIRECT` into action catch blocks.
+2. **Zero Role Coercion (SEC-004):**
+   - In `getCurrentAdmin()`: Valid admin roles are strictly limited to `super_admin`, `admin`, and `staff`.
+   - Any unrecognised role, customer role, or empty role throws `AuthorizationError` immediately. Roles are never defaulted to `staff`.
+3. **Loop Prevention & Parameterized Redirects (BUG-032):**
+   - The proxy's `/login` route bypasses redirecting to `/` when arriving with an `error` query parameter.
+   - Stale or unauthorized sessions are redirected to `/login?error=session` or `/login?error=forbidden`, rendering an explanatory alert instead of looping infinitely.
+4. **No Anonymous Server Action Principals (ARCH-003):**
+   - Removed `requiredRole: null` from `createSafeAction`. All actions require at least `staff` privileges.
+   - Asserted `admin.id !== "anonymous"` on all action executions.
+5. **Super Administrator Lockdown for Settings (SEC-013):**
+   - `/settings` page, `updateStoreSettingAction`, `updateStoreSettingsBatchAction`, and `SettingsService` mutations strictly require `super_admin` privileges.
+
+### Rationale
+- Prevents horizontal customer-to-staff privilege escalation.
+- Standardizes server-side authentication error handling and eliminates unhandled `NEXT_REDIRECT` errors.
+- Protects store-wide sensitive banking, tax, and notification configurations from unauthorized modification.
+
 
 

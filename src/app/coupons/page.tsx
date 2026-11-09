@@ -13,27 +13,55 @@ export const metadata: Metadata = {
   description: "Create and manage promotional voucher codes, minimum spends, and usage limits.",
 };
 
-export default async function Page() {
+interface PageProps {
+  searchParams: Promise<{
+    page?: string;
+    limit?: string;
+    status?: string;
+    q?: string;
+    sortBy?: string;
+    sortOrder?: string;
+  }>;
+}
+
+export default async function Page({ searchParams }: PageProps) {
   const admin = await requireStaffContext();
+  const sp = await searchParams;
+
+  const page = Math.max(1, Number(sp?.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(sp?.limit) || 20));
 
   let initialCoupons: Coupon[] = [];
+  let pagination = {
+    totalItems: 0,
+    totalPages: 1,
+    currentPage: page,
+    limit,
+  };
 
   try {
     const couponsResult = await couponService.getCoupons(
       {
-        page: 1,
-        limit: 100,
-        sortBy: "createdAt",
-        sortOrder: "desc",
-        status: "all",
+        page,
+        limit,
+        sortBy: (sp?.sortBy as any) || "createdAt",
+        sortOrder: sp?.sortOrder === "asc" ? "asc" : "desc",
+        status: (sp?.status as any) || "all",
+        q: typeof sp?.q === "string" ? sp.q : undefined,
       },
       admin
     );
 
     initialCoupons = couponsResult.items.map(toCouponDTO);
+    pagination = {
+      totalItems: couponsResult.pagination.totalItems,
+      totalPages: couponsResult.pagination.totalPages,
+      currentPage: couponsResult.pagination.page,
+      limit: couponsResult.pagination.limit,
+    };
   } catch (err) {
     console.error("[Coupons Page Error]: Failed to fetch coupons:", err);
   }
 
-  return <CouponsPage initialCoupons={initialCoupons} />;
+  return <CouponsPage initialCoupons={initialCoupons} initialPagination={pagination} />;
 }

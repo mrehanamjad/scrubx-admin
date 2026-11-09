@@ -1,6 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { db } from "../db/index.ts";
+import { notificationReads } from "../db/schema/notifications.ts";
 import { createSafeAction } from "../server/action-client.ts";
 import { settingsService } from "../server/services/settings.service.ts";
 import {
@@ -38,13 +41,13 @@ export const getStoreSettingByKeyAction = createSafeAction(
 
 /**
  * Server Action: Update a store setting.
- * Validates payload with updateStoreSettingSchema, enforces admin role,
+ * Validates payload with updateStoreSettingSchema, strictly enforces super_admin role (SEC-013),
  * and revalidates the /settings route cache.
  */
 export const updateStoreSettingAction = createSafeAction(
   {
     schema: updateStoreSettingSchema,
-    requiredRole: "admin",
+    requiredRole: "super_admin",
   },
   async ({ input, admin }) => {
     const updated = await settingsService.updateSetting(
@@ -61,13 +64,13 @@ export const updateStoreSettingAction = createSafeAction(
 
 /**
  * Server Action: Batch update store settings from the admin settings form.
- * Strictly enforces admin role authorization, runs atomically in a transaction,
+ * Strictly enforces super_admin role authorization (SEC-013), runs atomically in a transaction,
  * and revalidates the /settings route cache.
  */
 export const updateStoreSettingsBatchAction = createSafeAction(
   {
     schema: batchUpdateStoreSettingsSchema,
-    requiredRole: "admin",
+    requiredRole: "super_admin",
   },
   async ({ input, admin }) => {
     const updated = await settingsService.updateSettingsBatch(input as any, admin);
@@ -86,5 +89,30 @@ export const getDatabaseHealthAction = createSafeAction(
   },
   async ({ admin }) => {
     return settingsService.getHealthStatus(admin);
+  }
+);
+
+/**
+ * Server Action: Mark an operational notification as read for the current operator (ECOM-011).
+ * Idempotently records into notification_reads.
+ * Requires at least staff role.
+ */
+export const markNotificationReadAction = createSafeAction(
+  {
+    schema: z.object({
+      key: z.string().trim().min(1),
+    }),
+    requiredRole: "staff",
+  },
+  async ({ input, admin }) => {
+    await db
+      .insert(notificationReads)
+      .values({
+        userId: admin.id,
+        notificationKey: input.key,
+        readAt: new Date(),
+      })
+      .onConflictDoNothing();
+    return { success: true };
   }
 );

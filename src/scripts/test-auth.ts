@@ -40,8 +40,14 @@ async function runAuthSuite() {
   console.log("       ScrubX Better Auth Full Verification Suite       ");
   console.log("========================================================\n");
 
-  const testEmail = "admin@scrubx.pk";
-  const validPassword = process.env.ADMIN_PASSWORD || "Admin@ScrubX2026!";
+  const testEmail = (process.env.ADMIN_EMAIL || "admin@scrubx.pk").trim().toLowerCase();
+  const validPassword = process.env.ADMIN_PASSWORD;
+
+  if (!validPassword) {
+    console.log("ℹ️  [SKIP] ADMIN_PASSWORD environment variable is not configured. Skipping live sign-in test suite.");
+    process.exit(0);
+  }
+
   const invalidPassword = "WrongPassword999!";
 
   let activeToken = "";

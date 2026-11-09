@@ -37,3 +37,21 @@ export function uniqueId(prefix = "id") {
 export function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
+
+/**
+ * Checks whether an image URL is safe to render via next/image (PERF-010).
+ * Strictly restricts remote hosts to ImageKit per next.config.ts.
+ */
+export function isAllowedImageHost(url?: string | null): boolean {
+  if (!url) return false;
+  if (url.startsWith("/")) return true;
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      (parsed.hostname === "ik.imagekit.io" || parsed.hostname.endsWith(".imagekit.io"))
+    );
+  } catch {
+    return false;
+  }
+}

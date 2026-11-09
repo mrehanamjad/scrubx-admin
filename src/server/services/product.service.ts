@@ -1,4 +1,4 @@
-import { eq, inArray, count } from "drizzle-orm";
+import { eq, and, inArray, count, sql } from "drizzle-orm";
 import { db } from "../../db/index.ts";
 import {
   products,
@@ -8,6 +8,7 @@ import {
 } from "../../db/schema/catalog.ts";
 import { inventory, inventoryMovements } from "../../db/schema/inventory.ts";
 import { orderItems } from "../../db/schema/orders.ts";
+import { mediaUploads } from "../../db/schema/media.ts";
 import {
   productRepository,
   ProductRepository,
@@ -28,17 +29,53 @@ import type {
 } from "../validation/catalog.ts";
 import type { PaginatedResult } from "../types.ts";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Safely deletes a file from ImageKit without throwing unhandled exceptions
  * that could break post-transaction operations.
+ * Skips fabricated placeholders and files shared with other products (BUG-021 & BUG-022).
  */
 async function safeDeleteImageKitFile(fileId: string | null | undefined): Promise<void> {
-  if (!fileId) return;
+  if (!fileId || fileId.startsWith("img-")) return;
   try {
+    const [stillUsed] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(productImages)
+      .where(eq(productImages.imagekitFileId, fileId));
+
+    if (stillUsed && stillUsed.count > 0) {
+      return;
+    }
+
     await imagekit.deleteFile(fileId);
   } catch (err) {
     console.warn(`[ImageKit Purge Warning]: Failed to delete file '${fileId}':`, err);
   }
+}
+
+/**
+ * Resolves colour database ID from local client keys, colour names, or existing UUIDs.
+ * Prevents non-UUID values from ever reaching uuid columns (BUG-018 & BUG-019).
+ */
+function resolveColorId(
+  localId: string | null | undefined,
+  localName: string | null | undefined,
+  colorKeyToDbId: Map<string, string>
+): string | null {
+  if (!localId && !localName) return null;
+  if (localId) {
+    const trimmedId = localId.trim();
+    const mapped = colorKeyToDbId.get(trimmedId) || colorKeyToDbId.get(trimmedId.toLowerCase());
+    if (mapped) return mapped;
+    if (UUID_REGEX.test(trimmedId)) return trimmedId;
+  }
+  if (localName) {
+    const trimmedName = localName.trim().toLowerCase();
+    const mapped = colorKeyToDbId.get(trimmedName);
+    if (mapped) return mapped;
+  }
+  return null;
 }
 
 export class ProductService {
@@ -191,13 +228,7 @@ export class ProductService {
 
       // 4c. Insert variants, inventory rows, and restock movements
       for (const variant of input.variants) {
-        let resolvedColorId: string | null = null;
-        if (variant.colorId) {
-          resolvedColorId =
-            colorKeyToDbId.get(variant.colorId) ||
-            colorKeyToDbId.get(variant.colorId.toLowerCase().trim()) ||
-            variant.colorId;
-        }
+        const resolvedColorId = resolveColorId(variant.colorId, variant.colorName, colorKeyToDbId);
 
         const [insertedVariant] = await tx
           .insert(productVariants)
@@ -235,23 +266,28 @@ export class ProductService {
       // 4d. Insert images
       if (input.images && input.images.length > 0) {
         for (const img of input.images) {
-          let resolvedImgColorId: string | null = null;
-          if (img.colorId) {
-            resolvedImgColorId =
-              colorKeyToDbId.get(img.colorId) ||
-              colorKeyToDbId.get(img.colorId.toLowerCase().trim()) ||
-              img.colorId;
-          }
+          const resolvedImgColorId = resolveColorId(img.colorId, img.colorName, colorKeyToDbId);
 
           await tx.insert(productImages).values({
             productId: product.id,
             colorId: resolvedImgColorId || null,
-            imagekitFileId: img.imagekitFileId,
+            imagekitFileId: img.imagekitFileId || null,
             url: img.url,
             thumbnailUrl: img.thumbnailUrl || null,
             altText: img.altText || null,
             sortOrder: img.sortOrder ?? 0,
           });
+
+          // Mark media_uploads row as attached (ECOM-008)
+          if (img.imagekitFileId) {
+            await tx
+              .update(mediaUploads)
+              .set({
+                attachedAt: new Date(),
+                productId: product.id,
+              })
+              .where(eq(mediaUploads.imagekitFileId, img.imagekitFileId));
+          }
         }
       }
     });
@@ -417,13 +453,7 @@ export class ProductService {
 
         // Process updates and new variants
         for (const variant of input.variants) {
-          let resolvedColorId: string | null = null;
-          if (variant.colorId) {
-            resolvedColorId =
-              colorKeyToDbId.get(variant.colorId) ||
-              colorKeyToDbId.get(variant.colorId.toLowerCase().trim()) ||
-              variant.colorId;
-          }
+          const resolvedColorId = resolveColorId(variant.colorId, variant.colorName, colorKeyToDbId);
 
           if (variant.id && incomingVariantIds.has(variant.id)) {
             // Update existing variant row
@@ -549,7 +579,9 @@ export class ProductService {
         );
 
         for (const rem of removedImages) {
-          imageFilesToPurge.push(rem.imagekitFileId);
+          if (rem.imagekitFileId) {
+            imageFilesToPurge.push(rem.imagekitFileId);
+          }
         }
 
         if (removedImages.length > 0) {
@@ -558,13 +590,7 @@ export class ProductService {
         }
 
         for (const img of input.images) {
-          let resolvedImgColorId: string | null = null;
-          if (img.colorId) {
-            resolvedImgColorId =
-              colorKeyToDbId.get(img.colorId) ||
-              colorKeyToDbId.get(img.colorId.toLowerCase().trim()) ||
-              img.colorId;
-          }
+          const resolvedImgColorId = resolveColorId(img.colorId, img.colorName, colorKeyToDbId);
 
           if (img.id && incomingImageIds.has(img.id)) {
             await tx
@@ -579,12 +605,23 @@ export class ProductService {
             await tx.insert(productImages).values({
               productId: input.id,
               colorId: resolvedImgColorId || null,
-              imagekitFileId: img.imagekitFileId,
+              imagekitFileId: img.imagekitFileId || null,
               url: img.url,
               thumbnailUrl: img.thumbnailUrl || null,
               altText: img.altText || null,
               sortOrder: img.sortOrder ?? 0,
             });
+
+            // Mark media_uploads row as attached (ECOM-008)
+            if (img.imagekitFileId) {
+              await tx
+                .update(mediaUploads)
+                .set({
+                  attachedAt: new Date(),
+                  productId: input.id,
+                })
+                .where(eq(mediaUploads.imagekitFileId, img.imagekitFileId));
+            }
           }
         }
       }
@@ -663,6 +700,61 @@ export class ProductService {
       success: true,
       deletedId: id,
       purgedImagesCount: fileIds.length,
+    };
+  }
+
+  /**
+   * Detaches and permanently deletes a specific product image record,
+   * then purges the asset from ImageKit post-commit.
+   * Strictly verifies that imageId belongs to productId.
+   * Strictly requires administrator (admin or super_admin) privileges.
+   */
+  async detachImage(input: { productId: string; imageId: string }, admin: AdminContext) {
+    assertRole(admin, ["admin"]);
+
+    const product = await this.productRepo.findById(input.productId);
+    if (!product) {
+      throw new NotFoundError("Product", input.productId);
+    }
+
+    let fileIdToPurge: string | null = null;
+
+    await db.transaction(async (tx) => {
+      const [existingImage] = await tx
+        .select()
+        .from(productImages)
+        .where(
+          and(
+            eq(productImages.id, input.imageId),
+            eq(productImages.productId, input.productId)
+          )
+        );
+
+      if (!existingImage) {
+        throw new NotFoundError("ProductImage", input.imageId);
+      }
+
+      fileIdToPurge = existingImage.imagekitFileId;
+
+      await tx
+        .delete(productImages)
+        .where(
+          and(
+            eq(productImages.id, input.imageId),
+            eq(productImages.productId, input.productId)
+          )
+        );
+    });
+
+    // Purge asset from ImageKit strictly after DB transaction commits
+    if (fileIdToPurge) {
+      await safeDeleteImageKitFile(fileIdToPurge);
+    }
+
+    return {
+      success: true,
+      productId: input.productId,
+      imageId: input.imageId,
     };
   }
 }

@@ -7,6 +7,8 @@ import {
   orderCoupons,
   orderNotes,
   orderStatusHistory,
+  orderReturns,
+  orderReturnItems,
   customers,
   paymentMethods,
   shippingMethods,
@@ -23,6 +25,8 @@ import {
   type Payment,
   type OrderNote,
   type OrderStatusHistory,
+  type OrderReturn,
+  type OrderReturnItem,
 } from "../../db/schema/index.ts";
 import { buildPaginatedResult, type DatabaseExecutor } from "./base.repository.ts";
 import { couponRepository, CouponRepository } from "./coupon.repository.ts";
@@ -125,6 +129,14 @@ export class OrderRepository {
       conditions.push(eq(orders.status, filter.status));
     }
 
+    // BUG-016: Payment status filter
+    if (filter.paymentStatus) {
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM payments p
+        WHERE p.order_id = ${orders.id} AND p.status = ${filter.paymentStatus}
+      )`);
+    }
+
     if (filter.paymentMethodId) {
       conditions.push(eq(orders.paymentMethodId, filter.paymentMethodId));
     }
@@ -147,9 +159,9 @@ export class OrderRepository {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // 1. Total count
+    // 1. Total count (without order_items join, orders is 1:1 with customers)
     const [totalRow] = await executor
-      .select({ count: sql<number>`cast(count(distinct ${orders.id}) as integer)` })
+      .select({ count: sql<number>`cast(count(${orders.id}) as integer)` })
       .from(orders)
       .leftJoin(customers, eq(orders.customerId, customers.id))
       .where(whereClause);
@@ -171,6 +183,7 @@ export class OrderRepository {
 
     const orderExpr = filter.sortOrder === "asc" ? asc(sortColumn) : desc(sortColumn);
 
+    // BUG-016 & PERF-003: Subquery per row eliminates Cartesian product and full-table GROUP BY
     const rows = await executor
       .select({
         id: orders.id,
@@ -187,24 +200,14 @@ export class OrderRepository {
         customerPhone: customers.phone,
         paymentMethodName: paymentMethods.name,
         latestPaymentStatus: sql<string | null>`(
-          select status from payments where order_id = ${orders.id} order by created_at desc limit 1
+          select p.status from payments p where p.order_id = ${orders.id} order by p.created_at desc limit 1
         )`,
-        itemsCount: sql<number>`cast(coalesce(sum(${orderItems.quantity}), 0) as integer)`,
+        itemsCount: sql<number>`cast(coalesce((select sum(oi.quantity) from order_items oi where oi.order_id = ${orders.id}), 0) as integer)`,
       })
       .from(orders)
       .leftJoin(customers, eq(orders.customerId, customers.id))
       .leftJoin(paymentMethods, eq(orders.paymentMethodId, paymentMethods.id))
-      .leftJoin(orderItems, eq(orders.id, orderItems.orderId))
       .where(whereClause)
-      .groupBy(
-        orders.id,
-        customers.id,
-        customers.email,
-        customers.firstName,
-        customers.lastName,
-        customers.phone,
-        paymentMethods.name
-      )
       .orderBy(orderExpr)
       .limit(filter.limit)
       .offset(offset);
@@ -348,8 +351,18 @@ export class OrderRepository {
 
     // Status History
     const statusHistoryList = await executor
-      .select()
+      .select({
+        id: orderStatusHistory.id,
+        orderId: orderStatusHistory.orderId,
+        fromStatus: orderStatusHistory.fromStatus,
+        toStatus: orderStatusHistory.toStatus,
+        note: orderStatusHistory.note,
+        changedBy: orderStatusHistory.changedBy,
+        authorName: baUser.name,
+        createdAt: orderStatusHistory.createdAt,
+      })
       .from(orderStatusHistory)
+      .leftJoin(baUser, eq(baUser.id, orderStatusHistory.changedBy))
       .where(eq(orderStatusHistory.orderId, id))
       .orderBy(desc(orderStatusHistory.createdAt));
 
@@ -513,22 +526,27 @@ export class OrderRepository {
   /**
    * Updates shipping and courier details.
    */
+  /**
+   * Updates order courier and tracking number.
+   * Defensively restricted to shipping metadata only; cannot alter order status or timestamps (BUG-006).
+   */
   async updateShippingInfo(
     orderId: string,
     data: {
       courier?: string | null;
       trackingNumber?: string | null;
-      shippedAt?: Date | null;
-      deliveredAt?: Date | null;
     },
     tx: DatabaseExecutor
   ): Promise<Order> {
+    const updatePayload: Record<string, unknown> = {
+      updatedAt: new Date(),
+    };
+    if (data.courier !== undefined) updatePayload.courier = data.courier;
+    if (data.trackingNumber !== undefined) updatePayload.trackingNumber = data.trackingNumber;
+
     const [updated] = await tx
       .update(orders)
-      .set({
-        ...data,
-        updatedAt: new Date(),
-      })
+      .set(updatePayload)
       .where(eq(orders.id, orderId))
       .returning();
     return updated;
@@ -570,6 +588,131 @@ export class OrderRepository {
       shippedCount: metrics?.shippedCount ?? 0,
       deliveredCount: metrics?.deliveredCount ?? 0,
     };
+  }
+
+  /**
+   * Counts orders marked as delivered within the current month (in Asia/Karachi store timezone).
+   */
+  async getDeliveredThisMonthCount(executor: DatabaseExecutor = db): Promise<number> {
+    const [row] = await executor
+      .select({
+        count: sql<number>`cast(count(*) as integer)`,
+      })
+      .from(orders)
+      .where(
+        sql`status = 'delivered' AND coalesce(delivered_at, updated_at) >= date_trunc('month', now() AT TIME ZONE 'Asia/Karachi') AT TIME ZONE 'Asia/Karachi'`
+      );
+
+    return row?.count ?? 0;
+  }
+
+  /**
+   * ECOM-002: Creates an order return bundle with return items.
+   */
+  async createReturnBundle(
+    data: {
+      orderId: string;
+      reason: string;
+      requestedBy?: string | null;
+      replacementOrderId?: string | null;
+      notes?: string | null;
+      items: Array<{ orderItemId: string; quantity: number; restock?: boolean }>;
+    },
+    executor: DatabaseExecutor = db
+  ): Promise<{ returnRecord: OrderReturn; items: OrderReturnItem[] }> {
+    const [returnRecord] = await executor
+      .insert(orderReturns)
+      .values({
+        orderId: data.orderId,
+        reason: data.reason,
+        requestedBy: data.requestedBy || null,
+        replacementOrderId: data.replacementOrderId || null,
+        notes: data.notes || null,
+        status: "requested",
+      })
+      .returning();
+
+    const items: OrderReturnItem[] = [];
+    for (const itm of data.items) {
+      const [createdItem] = await executor
+        .insert(orderReturnItems)
+        .values({
+          returnId: returnRecord.id,
+          orderItemId: itm.orderItemId,
+          quantity: itm.quantity,
+          restock: itm.restock ?? true,
+        })
+        .returning();
+      items.push(createdItem);
+    }
+
+    return { returnRecord, items };
+  }
+
+  /**
+   * Finds a return by ID with its items.
+   */
+  async findReturnById(
+    returnId: string,
+    executor: DatabaseExecutor = db
+  ): Promise<(OrderReturn & { items: OrderReturnItem[] }) | null> {
+    const [returnRecord] = await executor
+      .select()
+      .from(orderReturns)
+      .where(eq(orderReturns.id, returnId))
+      .limit(1);
+
+    if (!returnRecord) return null;
+
+    const items = await executor
+      .select()
+      .from(orderReturnItems)
+      .where(eq(orderReturnItems.returnId, returnId));
+
+    return { ...returnRecord, items };
+  }
+
+  /**
+   * Finds all returns associated with an order.
+   */
+  async findReturnsByOrderId(
+    orderId: string,
+    executor: DatabaseExecutor = db
+  ): Promise<Array<OrderReturn & { items: OrderReturnItem[] }>> {
+    const returnRows = await executor
+      .select()
+      .from(orderReturns)
+      .where(eq(orderReturns.orderId, orderId))
+      .orderBy(desc(orderReturns.createdAt));
+
+    const results: Array<OrderReturn & { items: OrderReturnItem[] }> = [];
+    for (const ret of returnRows) {
+      const items = await executor
+        .select()
+        .from(orderReturnItems)
+        .where(eq(orderReturnItems.returnId, ret.id));
+      results.push({ ...ret, items });
+    }
+    return results;
+  }
+
+  /**
+   * Updates an order return.
+   */
+  async updateReturn(
+    returnId: string,
+    data: Partial<Omit<OrderReturn, "id" | "orderId" | "createdAt">>,
+    executor: DatabaseExecutor = db
+  ): Promise<OrderReturn> {
+    const [updated] = await executor
+      .update(orderReturns)
+      .set({
+        ...data,
+        updatedAt: new Date(),
+      })
+      .where(eq(orderReturns.id, returnId))
+      .returning();
+    return updated;
   }
 }
 

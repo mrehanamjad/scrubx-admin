@@ -54,5 +54,9 @@ export const shippingMethods = pgTable(
       "chk_shipping_methods_max_days",
       sql`${table.maxDays} IS NULL OR ${table.maxDays} >= 0`
     ),
+    check(
+      "chk_shipping_methods_range",
+      sql`${table.minDays} IS NULL OR ${table.maxDays} IS NULL OR ${table.maxDays} >= ${table.minDays}`
+    ),
   ]
 );

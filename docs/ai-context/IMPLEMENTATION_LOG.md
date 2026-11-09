@@ -882,3 +882,274 @@ Strictly adhere to:
    - `npm run lint`: **0 errors, 0 warnings**.
    - `npx tsc --noEmit`: **0 errors**.
    - `npm run build`: Production Next.js 16 build succeeded with 0 warnings.
+
+---
+
+## 2026-11-09 — Phase 0 Baseline & Remediation Batch 1 (SEC-001, SEC-002, SEC-003, SEC-011, ARCH-010)
+
+### Objective
+Execute Phase 0 baseline verification and remediate critical security entry points, secret fallbacks, proxy bypasses, and documentation synchronization.
+
+### What Was Implemented
+1. **SEC-001 (Delete `/api/auth/verify`):**
+   - Removed diagnostic route handler `src/app/api/auth/verify/route.ts` that performed live super_admin sign-ins with default passwords.
+   - Verified zero remaining references across `src/`.
+2. **SEC-002 (Hardcoded Credential Fallbacks):**
+   - In `src/scripts/create-admin.ts`: Removed default password literal `Admin@ScrubX2026!`. Enforced mandatory `ADMIN_PASSWORD` (min 12 chars) with fail-fast process exit. Validated `ADMIN_ROLE` against allowed admin roles (`super_admin`, `admin`, `staff`).
+   - In `src/scripts/test-auth.ts`: Gracefully skips test suite (exit 0) when `ADMIN_PASSWORD` is unset instead of falling back to default credentials.
+   - Documented `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `ADMIN_ROLE` in `.env.example`.
+   - Recorded mandatory admin password rotation requirement in `docs/ai-context/AUTH_CONTEXT.md`.
+3. **SEC-003 (Better Auth Secret Fallback):**
+   - In `src/lib/auth.ts`: Removed hardcoded 64-hex secret fallback (`17f75554...`).
+   - Added `requireAuthSecret` throwing descriptive error if absent or < 32 characters.
+   - Fixed `getTrustedOrigins()` and `getBaseUrl()` to enforce explicit environment variables in production.
+   - Documented `BETTER_AUTH_TRUSTED_ORIGINS` in `.env.example` and noted session invalidation consequence in `AUTH_CONTEXT.md`.
+4. **SEC-011 (Proxy Matcher & API Auth):**
+   - In `src/proxy.ts`: Replaced negative-lookahead regex with an explicit route inclusion list.
+   - Enforced 401 JSON response for unauthenticated `/api/*` routes instead of redirecting to login page.
+   - Added `!request.nextUrl.searchParams.has("error")` check to prevent infinite redirect loops on invalid sessions (BUG-032).
+   - Created in-memory window rate limiter `src/server/rate-limit.ts` for authentication and signature endpoints.
+5. **ARCH-010 (Documentation Synchronization):**
+   - Symlinked `docs/AI context` -> `docs/ai-context` to resolve path case mismatch on Linux filesystems.
+   - Synchronized `ARCHITECTURE.md`, `PROJECT_OVERVIEW.md`, `PENDING_TASKS.md`, `README.md`, and `SKILL.md` to reflect RSC architecture and eliminate stale mock-store references.
+
+### Files Created
+- `src/server/rate-limit.ts`
+- `docs/AI context` (symlink to `docs/ai-context`)
+
+### Files Modified
+- `src/lib/auth.ts`
+- `src/proxy.ts`
+- `src/scripts/create-admin.ts`
+- `src/scripts/test-auth.ts`
+- `.env.example`
+- `README.md`
+- `docs/ai-context/AUTH_CONTEXT.md`
+- `docs/ai-context/ARCHITECTURE.md`
+- `docs/ai-context/PROJECT_OVERVIEW.md`
+- `docs/ai-context/PENDING_TASKS.md`
+- `.agent/skills/project-context-management/SKILL.md`
+
+### Files Deleted
+- `src/app/api/auth/verify/route.ts`
+
+### Verification & Tests
+1. `npx tsc --noEmit`: Clean (0 errors).
+2. `npm run lint`: Clean (0 errors, 0 warnings).
+3. `npm run db:verify`: Successfully connected to Supabase PostgreSQL 17.
+4. `npm run auth:test`: Skipped cleanly when credentials unconfigured.
+5. `grep -rn "17f75554" src/`: 0 matches.
+6. `grep -rn "Admin@ScrubX2026" src/`: 0 matches.
+
+---
+
+## 2026-11-09: Batch 11 — UX, Search, Notes & Authorization Honesty (BUG-023, BUG-024, BUG-025, BUG-026, DB-011)
+
+### Objectives
+Resolve and verify all 5 Batch 11 issues in §12.4:
+1. `BUG-023`: Topbar search `?q=` ignored across list pages.
+2. `BUG-024`: Orders list missing payment-method filters (`sadapay`, `nayapay`) and false "this month" badge count.
+3. `BUG-025` & `DB-011`: Dedicated `customer_notes` database table with foreign key cascade, auditability, delimiter preservation, and server action + DTO mapping.
+4. `BUG-026`: UI authorization gating with isomorphic capability matrix (`src/lib/permissions.ts`), `RoleProvider`, and leaf component capability checks across staff, admin, and super_admin.
+
+### Key Changes
+1. **BUG-023 (Search Query Contract):**
+   - In `src/components/layout/topbar.tsx`: `handleSearchSubmit` detects pathname to navigate to `/orders?q=...` when on orders, `/customers?q=...` when on customers, and `/products?q=...` elsewhere.
+   - Updated `src/app/products/page.tsx`, `src/app/orders/page.tsx`, and `src/app/customers/page.tsx` to pass `initialQuery={sp?.q ?? ""}` down to their respective views.
+   - In `Products.tsx`, `Orders.tsx`, `Customers.tsx`: Initialized query state from `initialQuery` and bound `onSubmit` on `SearchInput` to `router.replace` with `?q=...` on Enter.
+2. **BUG-024 (Payment Filters & Month Delivery Badge):**
+   - In `src/views/Orders.tsx`: Added `sadapay` and `nayapay` to payment method filter select.
+   - In `src/server/repositories/order.repository.ts` & `order.service.ts`: Added `getDeliveredThisMonthCount` querying orders with status `delivered` within current month in `Asia/Karachi` timezone.
+   - In `src/app/orders/page.tsx`: Loaded `deliveredThisMonthCount` in parallel via `Promise.all` and passed to view.
+   - In `src/views/Orders.tsx`: Replaced misleading badge with truthful `{deliveredThisMonthCount} delivered this month`.
+   - In `src/lib/dto.ts`: In `toOrderDTO`, normalized `bank_transfer` to `bank` and recognized `paymentMethodCode`.
+3. **BUG-025 & DB-011 (Dedicated Customer Notes):**
+   - Migration `supabase/migrations/20261109000005_customer_notes.sql`: Created `customer_notes` table (`id uuid pk`, `customer_id uuid fk cascade`, `body text`, `created_by text fk ba_user`, `created_at timestamptz`), index on `(customer_id, created_at desc)`, enabled RLS, and safe one-time backfill from legacy blobs.
+   - In `src/db/schema/customers.ts`, `relations.ts`, `types.ts`: Defined `customerNotes` table and relations.
+   - In `src/server/repositories/customer.repository.ts`: Added `addNote`, `listNotes`, `deleteNote`, and joined `baUser` in `findById` to return structured note history with author name.
+   - In `src/server/services/customer.service.ts`: Added `addNote` (`assertRole(["admin"])`), `listNotes` (`assertRole(["staff"])`), `deleteNote` (`assertRole(["super_admin"])`).
+   - In `src/server/validation/customers.ts`: Added `addCustomerNoteSchema` and `deleteCustomerNoteSchema`.
+   - In `src/actions/customers.ts`: Created `addCustomerNoteAction` and `deleteCustomerNoteAction`.
+   - In `src/views/CustomerDetail.tsx`: Updated `handleAddNote` to call `addCustomerNoteAction` without delimiter string-concatenation; displayed author names.
+4. **BUG-026 (UI Authorization Gating):**
+   - Created pure isomorphic `src/lib/permissions.ts` defining `CAPABILITIES` mirroring §6.1.1 matrix and `can(role, capability)`.
+   - Created `src/components/providers/role-provider.tsx` with `RoleProvider`, `useRole`, and `useCan`.
+   - In `src/components/layout/app-shell.tsx`: Wrapped shell in `<RoleProvider role={userRole}>`.
+   - In `src/components/layout/sidebar.tsx`: Used `can(userRole, "settings:write")` for Settings nav item.
+   - In `Products.tsx`: Gated "Add product", row duplicate/archive/delete actions, and bulk actions behind `can("product:write")`.
+   - In `OrderDetail.tsx`: Gated status transitions behind `can("order:status")`, courier save behind `can("order:ship")`, and payment approvals/refunds/rejections behind `can("payment:verify")`.
+   - In `Payments.tsx`: Gated Approve and Reject buttons behind `can("payment:verify")`.
+   - In `ProductForm.tsx`: Gated Save/Publish buttons behind `can("product:write")`.
+   - In `Settings.tsx`: Gated Save buttons behind `can("settings:write")`.
+   - In `CustomerDetail.tsx`: Gated note-adding form behind `can("customer:write")`.
+
+### Files Created
+- `supabase/migrations/20261109000005_customer_notes.sql`
+- `src/lib/permissions.ts`
+- `src/components/providers/role-provider.tsx`
+- `src/scripts/test-batch11-ux-and-auth.ts`
+
+### Files Modified
+- `src/db/schema/customers.ts`
+- `src/db/schema/relations.ts`
+- `src/db/schema/types.ts`
+- `src/server/repositories/customer.repository.ts`
+- `src/server/services/customer.service.ts`
+- `src/server/validation/customers.ts`
+- `src/actions/customers.ts`
+- `src/lib/types.ts`
+- `src/lib/dto.ts`
+- `src/components/shared/search-input.tsx`
+- `src/components/layout/topbar.tsx`
+- `src/components/layout/app-shell.tsx`
+- `src/components/layout/sidebar.tsx`
+- `src/app/products/page.tsx`
+- `src/app/orders/page.tsx`
+- `src/app/customers/page.tsx`
+- `src/server/repositories/order.repository.ts`
+- `src/server/services/order.service.ts`
+- `src/views/Products.tsx`
+- `src/views/Orders.tsx`
+- `src/views/Customers.tsx`
+- `src/views/CustomerDetail.tsx`
+- `src/views/OrderDetail.tsx`
+- `src/views/Payments.tsx`
+- `src/views/ProductForm.tsx`
+- `src/views/Settings.tsx`
+- `package.json`
+- `docs/ai-context/PRODUCTION_REMEDIATION_PLAN.md`
+
+### Verification & Tests
+1. `npm run db:parity`: 100% PASS (26 tables verified).
+2. `npm run ux:test`: 12 Passed, 0 Failed.
+3. `npm run orders:test`: 59 Passed, 0 Failed.
+4. `npx tsc --noEmit`: Clean (0 errors).
+5. `npm run lint`: Clean (0 errors, 0 warnings).
+6. `npm run build`: Production build succeeded with all routes dynamic.
+
+
+---
+
+## 2026-11-09: Batch 12 — Hardening, Security, Dependency Reconciliation & Codebase Cleanup (SEC-010, SEC-012, ARCH-002, ARCH-003, ARCH-004, ARCH-006, ARCH-007, ARCH-008, PERF-010, PERF-011, PERF-012)
+
+### Objectives
+Resolve and verify all 11 Batch 12 issues in §12.4:
+1. `SEC-010`: Missing HTTP security headers (CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy).
+2. `SEC-012`: Raw error messages leaked to the browser; domain error sanitization and masking of Postgres codes (23505, 23503, 23514).
+3. `ARCH-002`: Eliminate redundant internal Route Handlers; maintain strict Server Actions First architecture for all mutations (ADR 019).
+4. `ARCH-003`: Single source of truth for session retrieval and administrative context (`src/server/auth.ts`).
+5. `ARCH-004`: Complete deletion of legacy mock files (`src/data/mock.ts`, `src/data/store.tsx`) and removed UI scaffolding.
+6. `ARCH-006`: Structured error and event logging via `src/lib/logger.ts` with sanitized metadata and zero raw object leaks.
+7. `ARCH-007`: Pruning of unreferenced dependencies from `package.json`.
+8. `ARCH-008`: Resolution of npm peer dependency conflict; upgrade `drizzle-orm` to `^0.45.4` and `drizzle-kit` to `^0.31.11` to eliminate `--legacy-peer-deps`.
+9. `PERF-010`, `PERF-011`, `PERF-012`: Code splitting, dynamic imports for modals, ImageKit responsive URL presets, and production bundle size reduction.
+
+### Key Changes
+1. **SEC-010 (HTTP Security Headers):** Configured strict security headers in `next.config.ts` including Content Security Policy (`default-src 'self'`), Strict-Transport-Security (`max-age=63072000; includeSubDomains; preload`), X-Content-Type-Options (`nosniff`), X-Frame-Options (`DENY`), and Referrer-Policy (`strict-origin-when-cross-origin`).
+2. **SEC-012 (Error Masking):** Implemented `toActionError()` in `src/server/errors.ts` translating Postgres constraint errors into safe, user-facing error messages while concealing raw query strings, column names, and stack traces.
+3. **ARCH-002 & ARCH-003 (Server Actions First & Single Auth Module):** Removed unused API endpoints; restricted Route Handlers strictly to external integration webhooks/jobs (`/api/auth`, `/api/upload/auth`, `/api/admin/jobs/expire-orders`). Standardized all session resolution onto `src/server/auth.ts`.
+4. **ARCH-004 & ARCH-007 (Mock Data Decommissioning & Pruning):** Removed obsolete mock stores and cleaned up `package.json` dependencies.
+5. **ARCH-008 (Peer Dependency Resolution):** Upgraded `drizzle-orm` and `drizzle-kit`, enabling standard clean `npm ci` executions without legacy flags.
+6. **PERF-010, PERF-011, PERF-012 (Performance Optimization):** Configured Turbopack optimizations, image lazy loading, and dynamic chunking.
+
+---
+
+## 2026-11-09: Batch 13 — E-Commerce Lifecycle Completion (ECOM-001 through ECOM-012)
+
+### Objectives
+Implement and verify all 12 e-commerce lifecycle workflows in §12.4:
+1. `ECOM-001`: Unpaid Order Expiration cron job with `CRON_SECRET` and `SKIP LOCKED`.
+2. `ECOM-002` & `ECOM-003`: Returns and Product Exchanges / RMA workflows.
+3. `ECOM-004` & `ECOM-010`: Customer notes pinned/soft-delete lifecycle and unified 4-source activity feed.
+4. `ECOM-005`: Staff team management UI and actions with session invalidation.
+5. `ECOM-006`: Duplicate transaction reference detection and super admin override.
+6. `ECOM-007`: Printable Invoice and Packing Slip with print media styling.
+7. `ECOM-008`: Orphan media asset tracking and cleanup pipeline.
+8. `ECOM-009`: Bulk order operations with multi-select table rows and floating action bar.
+9. `ECOM-011`: Stateful read-tracked operational notifications.
+10. `ECOM-012`: Storefront settings registry and strict contract validation.
+
+### Key Changes
+1. **ECOM-001 (Unpaid Order Expiration):** Created `src/app/api/admin/jobs/expire-orders/route.ts` with `CRON_SECRET` authentication, querying expired unpaid orders via PostgreSQL `SKIP LOCKED`, releasing reserved stock, updating status to `cancelled`, and displaying expiration countdown banners in `OrderDetail.tsx`.
+2. **ECOM-006 (Duplicate TID Detection & Override):** Added soft duplicate check on proof submission, blocked approval on duplicate transaction references without explicit `allowDuplicateTid` override, restricted override to `super_admin` with audit logging, and displayed warning badges in `Payments.tsx`.
+3. **ECOM-002 & ECOM-003 (Returns & Product Exchanges / RMA):** Migration `20261109000009_ecommerce_lifecycle.sql` created `order_returns` and `order_return_items`. Implemented `requestReturn`, `approveReturn`, `receiveReturn`, `completeReturn`, and `createExchange` in `OrderRepository` and `OrderService`. Exposed safe actions in `src/actions/orders.ts` and interactive RMA modal in `OrderDetail.tsx`.
+4. **ECOM-007 (Printable Invoice & Packing Slip):** Built `src/app/orders/[id]/print/page.tsx` and `print-controls.tsx` with dedicated `@media print` CSS, clean receipt typography, toggleable packing slip mode, and AppShell print bypass.
+5. **ECOM-004 & ECOM-010 (Customer Notes & Unified Activity Timeline):** Added `is_pinned`, `deleted_at`, and `deleted_by` to `customer_notes`. Built note composer with keyboard shortcuts, pinning, relative time formatting (`src/lib/format.ts`), and keyset-paginated 4-source activity feed (`orders`, `order_status_history`, `payments`, `customer_notes`) via unified `UNION ALL` query.
+6. **ECOM-005 (Staff Team Management UI & Actions):** Created `src/server/validation/staff.ts`, `src/server/services/staff.service.ts`, `src/actions/staff.ts`, `src/views/Staff.tsx`, and `src/app/staff/page.tsx`. Implemented secure temporary password generation, Better Auth scrypt password hashing, audit logging, and immediate `ba_session` deletion upon staff account ban.
+7. **ECOM-008 (Orphan Media Tracking & Cleanup):** Tracked ImageKit uploads in `media_uploads` table, updated attachment timestamps in `ProductService`, and exposed list/cleanup server actions with dry-run support in `src/actions/media.ts`.
+8. **ECOM-009 (Bulk Order Operations):** Implemented multi-select table rows and floating action bar in `src/views/Orders.tsx`, backed by `bulkUpdateOrderStatusAction` in `src/actions/orders.ts`.
+9. **ECOM-011 (Stateful Read-Tracked Notifications):** Implemented `notification_reads` tracking in `shell.service.ts`, `markNotificationReadAction` in `src/actions/settings.ts`, and topbar notification dropdown integration.
+10. **ECOM-012 (Storefront Settings Contract & Registry):** Created `src/lib/store-settings-registry.ts` with strict validators (IBAN, phone, currency, URL), integrated into `settings.service.ts`, and published specification document `docs/ai-context/STOREFRONT_SETTINGS_CONTRACT.md`.
+
+---
+
+## 2026-11-09: Batch 14 — Automated Test Harness & Final CI Gates (TEST-001 through TEST-007, ARCH-009, DB-016)
+
+### Objectives
+Establish comprehensive automated testing, static regression guards, and CI pipeline for continuous verification:
+1. `TEST-001`: Vitest test runner configuration and pure logic unit test suite.
+2. `TEST-002`: Master declarative authorization matrix test suite.
+3. `TEST-003`: DTO snapshot parity and anti-fabrication test suite.
+4. `TEST-004`: Concurrency and transaction invariants integration test suite.
+5. `TEST-005`: Security assertions and proxy verification test suite.
+6. `TEST-006`: Static regression guards (G1–G10) integrated into lint pipeline.
+7. `TEST-007`: Zero-dependency load and capacity benchmark harness.
+8. `ARCH-009`: Multi-job GitHub Actions CI workflow, PR template, and branch protection specification.
+9. `DB-016`: 100% database schema parity audit across all 31 tables.
+
+### Key Changes
+1. **TEST-001 (Vitest Runner & Pure Logic Suite):** Installed `vitest@5.1.0` devDependency without legacy flags. Configured `vitest.config.ts` with path aliases and 60s timeout for remote DB transactions. Added `npm test`, `npm run test:watch`, and `npm run test:load` scripts. Created `test/unit/pure-logic.test.ts` (16 tests verifying formatting, permissions, registry validation, errors, safeInternalPath, and schemas).
+2. **TEST-002 (Authorization Matrix):** Created `test/unit/auth-matrix.test.ts` (3 tests) dynamically verifying AST extracted roles from all Server Actions against the master RBAC matrix, enforcing strict role hierarchy and customer role isolation.
+3. **TEST-003 (DTO Snapshots & Anti-Fabrication):** Created `test/unit/dto-snapshots.test.ts` (7 tests) validating category, coupon, shipping, engraving, and payment method DTO transformers, asserting that missing database fields return `undefined` rather than fabricated placeholder values.
+4. **TEST-004 (Concurrency Invariants):** Created `test/integration/concurrency.test.ts` (4 integration tests) verifying:
+   - Scenario 1: Stock oversell prevention with parallel order placements on last remaining unit.
+   - Scenario 2: Deadlock-free multi-item reservation under inverted item sequence ([A,B] vs [B,A]).
+   - Scenario 3: Idempotent payment approvals under parallel submission.
+   - Scenario 4: Single-use coupon race condition prevention.
+5. **TEST-005 (Security Verification Suite):** Created `test/unit/security.test.ts` (6 tests) verifying SEC-001 diagnostic route deletion, Next.js 16 security headers, open-redirect sanitization, proxy status codes (401 JSON / 307 redirect), and customer privilege escalation rejection.
+6. **TEST-006 (Static Regression Guards):** Created `scripts/check-guards.mjs` enforcing 10 automated guards:
+   - `[G1]`: Zero hardcoded credentials or secrets in `src/`.
+   - `[G2]`: No `redirect()` calls in Server Actions or Route Handlers.
+   - `[G3]`: Explicit non-null `requiredRole` on all Server Actions.
+   - `[G4]`: Preservation and rethrowing of `NEXT_REDIRECT` errors.
+   - `[G5]`: DTO `as any` count bounded below threshold.
+   - `[G6]`: Verification of all file links in `docs/ai-context/`.
+   - `[G7]`: Zero usage of `dangerouslySetInnerHTML`.
+   - `[G8]`: No raw object console logging in server domain services.
+   - `[G9]`: Dependency usage hygiene check.
+   - `[G10]`: Proxy route matcher uses explicit prefixes without negative lookaheads.
+   Wired into `npm run lint` (`eslint . && node scripts/check-guards.mjs`).
+7. **TEST-007 (Load & Capacity Harness):** Created `scripts/load-test.mjs` measuring p50, p90, p95, and p99 latency, throughput, and error rates across 50 operations with 10 concurrent workers.
+8. **ARCH-009 (CI/CD Pipeline & Branch Protection):** Created `.github/workflows/ci.yml` with 4 parallel jobs (`install-and-verify`, `audit`, `schema-parity`, `test`). Created `.github/pull_request_template.md` with §4.3 Definition of Done checklist. Documented branch protection requirements in `docs/ai-context/ARCHITECTURE.md` §11.
+9. **DB-016 (Schema Parity):** Audited all 31 tables, 45 foreign keys, CHECK constraints, indexes, triggers, and Row Level Security via `npm run db:parity`.
+
+### Files Created
+- `vitest.config.ts`
+- `test/unit/pure-logic.test.ts`
+- `test/unit/auth-matrix.test.ts`
+- `test/unit/dto-snapshots.test.ts`
+- `test/integration/concurrency.test.ts`
+- `test/unit/security.test.ts`
+- `scripts/check-guards.mjs`
+- `scripts/load-test.mjs`
+- `.github/workflows/ci.yml`
+- `.github/pull_request_template.md`
+- `docs/ai-context/STOREFRONT_SETTINGS_CONTRACT.md`
+- `supabase/migrations/20261109000009_ecommerce_lifecycle.sql`
+- `src/lib/store-settings-registry.ts`
+- `src/server/validation/staff.ts`
+- `src/server/services/staff.service.ts`
+- `src/actions/staff.ts`
+- `src/views/Staff.tsx`
+- `src/app/staff/page.tsx`
+- `src/app/api/admin/jobs/expire-orders/route.ts`
+- `src/app/orders/[id]/print/page.tsx`
+- `src/app/orders/[id]/print/print-controls.tsx`
+
+### Verification & Tests Summary
+1. `npm test`: **36/36 tests PASSED** across 5 test suites (16 pure logic, 3 auth matrix, 7 DTO snapshots, 6 security, 4 concurrency invariants).
+2. `npm run lint`: **0 errors**, all 10 static regression guards PASSED.
+3. `npm run db:parity`: **100% PASS** across all 31 tables, foreign keys, constraints, indexes, triggers, and RLS.
+4. `npx tsc --noEmit`: **0 errors** across all application and test TypeScript files.
+5. `npm run build`: Turbopack production build succeeded cleanly with all 24 routes server-rendered dynamically.
+6. `npm run test:load`: **50/50 requests succeeded** (0 errors) at 7.9 req/s with p50 latency of 637.83ms.

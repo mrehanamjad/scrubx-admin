@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import postgres from "postgres";
 
 // Load environment variables
@@ -9,10 +10,81 @@ if (fs.existsSync(".env.local")) {
   process.loadEnvFile(".env");
 }
 
+function calculateChecksum(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = "";
+  let inSingleQuote = false;
+  let inDollarQuote = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i];
+    const nextChar = sql[i + 1] || "";
+
+    // Line comments: --
+    if (!inSingleQuote && !inDollarQuote && !inBlockComment && char === "-" && nextChar === "-") {
+      inLineComment = true;
+    }
+    if (inLineComment && (char === "\n" || char === "\r")) {
+      inLineComment = false;
+    }
+
+    // Block comments: /* ... */
+    if (!inSingleQuote && !inDollarQuote && !inLineComment && char === "/" && nextChar === "*") {
+      inBlockComment = true;
+    }
+    if (inBlockComment && char === "*" && nextChar === "/") {
+      inBlockComment = false;
+      current += "*/";
+      i++;
+      continue;
+    }
+
+    // String literals: '...'
+    if (!inLineComment && !inBlockComment && !inDollarQuote && char === "'") {
+      if (inSingleQuote && nextChar === "'") {
+        current += "''";
+        i++;
+        continue;
+      }
+      inSingleQuote = !inSingleQuote;
+    }
+
+    // Semicolon separator outside quotes and comments
+    if (char === ";" && !inSingleQuote && !inDollarQuote && !inLineComment && !inBlockComment) {
+      const trimmed = current.trim();
+      if (trimmed) {
+        statements.push(trimmed);
+      }
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  const remainder = current.trim();
+  if (remainder) {
+    statements.push(remainder);
+  }
+
+  return statements;
+}
+
 async function runMigration() {
   console.log("\n========================================================");
   console.log("       ScrubX Database Schema Migration Runner         ");
   console.log("========================================================\n");
+
+  const isDryRun = process.argv.includes("--dry-run");
+  if (isDryRun) {
+    console.log("🔍 DRY RUN MODE ACTIVATED - No database modifications will occur.\n");
+  }
 
   const connectionString =
     process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL || "";
@@ -46,22 +118,38 @@ async function runMigration() {
   });
 
   try {
-    // 1. Create migration journal table if it does not exist
+    // 1. Create migration journal table if it does not exist (DB-015)
     await client`
       CREATE TABLE IF NOT EXISTS _app_migrations (
         name text PRIMARY KEY,
-        executed_at timestamptz NOT NULL DEFAULT now()
+        executed_at timestamptz NOT NULL DEFAULT now(),
+        non_transactional boolean NOT NULL DEFAULT false,
+        checksum text
       )
     `;
 
-    // 2. Fetch already executed migrations
-    const executedRows = await client<{ name: string }[]>`
-      SELECT name FROM _app_migrations
+    // Ensure columns exist on older instances
+    await client`
+      ALTER TABLE _app_migrations 
+      ADD COLUMN IF NOT EXISTS non_transactional boolean NOT NULL DEFAULT false
     `;
-    const executedSet = new Set(executedRows.map((r) => r.name));
+    await client`
+      ALTER TABLE _app_migrations 
+      ADD COLUMN IF NOT EXISTS checksum text
+    `;
+
+    // 2. Fetch already executed migrations
+    const executedRows = await client<{
+      name: string;
+      non_transactional: boolean;
+      checksum: string | null;
+    }[]>`
+      SELECT name, non_transactional, checksum FROM _app_migrations
+    `;
+    const executedMap = new Map(executedRows.map((r) => [r.name, r]));
 
     // If initial migration is not recorded but products table exists, baseline it
-    if (!executedSet.has("20261105000000_initial_schema.sql")) {
+    if (!executedMap.has("20261105000000_initial_schema.sql")) {
       const [existingTable] = await client<{ exists: boolean }[]>`
         SELECT EXISTS (
           SELECT FROM information_schema.tables 
@@ -69,34 +157,100 @@ async function runMigration() {
         ) as exists
       `;
       if (existingTable?.exists) {
+        const initialContent = fs.readFileSync(
+          path.join(migrationsDir, "20261105000000_initial_schema.sql"),
+          "utf-8"
+        );
+        const initialChecksum = calculateChecksum(initialContent);
         console.log("Baseline: 'products' table already exists. Marking '20261105000000_initial_schema.sql' as applied.");
-        await client`INSERT INTO _app_migrations (name) VALUES ('20261105000000_initial_schema.sql') ON CONFLICT DO NOTHING`;
-        executedSet.add("20261105000000_initial_schema.sql");
+        await client`
+          INSERT INTO _app_migrations (name, non_transactional, checksum)
+          VALUES ('20261105000000_initial_schema.sql', false, ${initialChecksum})
+          ON CONFLICT (name) DO UPDATE 
+          SET checksum = EXCLUDED.checksum
+        `;
+        executedMap.set("20261105000000_initial_schema.sql", {
+          name: "20261105000000_initial_schema.sql",
+          non_transactional: false,
+          checksum: initialChecksum,
+        });
       }
     }
 
     console.log(`Discovered ${migrationFiles.length} migration file(s):`);
+
+    // Verify integrity of applied migrations
     for (const file of migrationFiles) {
-      if (executedSet.has(file)) {
-        console.log(`  - ${file} [Already Applied]`);
+      const fullPath = path.join(migrationsDir, file);
+      const sqlContent = fs.readFileSync(fullPath, "utf-8");
+      const currentChecksum = calculateChecksum(sqlContent);
+      const isNoTx = sqlContent.trimStart().startsWith("-- migrate:no-transaction");
+      const modeLabel = isNoTx ? "[Non-Transactional]" : "[Transactional]";
+
+      const recorded = executedMap.get(file);
+      if (recorded) {
+        if (recorded.checksum && recorded.checksum !== currentChecksum) {
+          console.error(
+            `\n❌ INTEGRITY ERROR: Migration file '${file}' has been modified after being applied!`
+          );
+          console.error(`   Recorded Checksum: ${recorded.checksum}`);
+          console.error(`   Current Checksum:  ${currentChecksum}`);
+          throw new Error(`Checksum mismatch for already applied migration '${file}'.`);
+        } else if (!recorded.checksum) {
+          // Backfill missing checksum for legacy applied migration
+          await client`
+            UPDATE _app_migrations SET checksum = ${currentChecksum} WHERE name = ${file}
+          `;
+        }
+        console.log(`  - ${file} ${modeLabel} [Applied] (sha256: ${currentChecksum.slice(0, 8)}...)`);
       } else {
-        console.log(`  - ${file} [Pending]`);
+        console.log(`  - ${file} ${modeLabel} [Pending] (sha256: ${currentChecksum.slice(0, 8)}...)`);
       }
     }
 
-    // 3. Execute pending migrations sequentially in a transaction
+    if (isDryRun) {
+      console.log("\nDry run completed successfully. No changes made.");
+      return;
+    }
+
+    // 3. Execute pending migrations sequentially
     for (const file of migrationFiles) {
-      if (executedSet.has(file)) continue;
+      if (executedMap.has(file)) continue;
 
       const fullPath = path.join(migrationsDir, file);
       const sqlContent = fs.readFileSync(fullPath, "utf-8");
-      console.log(`\nExecuting pending migration: ${file}...`);
+      const checksum = calculateChecksum(sqlContent);
+      const isNoTx = sqlContent.trimStart().startsWith("-- migrate:no-transaction");
+      const modeLabel = isNoTx ? "non-transactional" : "transactional";
+
+      console.log(`\nExecuting pending ${modeLabel} migration: ${file}...`);
       const start = performance.now();
 
-      await client.begin(async (sql) => {
-        await sql.unsafe(sqlContent);
-        await sql`INSERT INTO _app_migrations (name) VALUES (${file})`;
-      });
+      if (isNoTx) {
+        // DB-015: Non-transactional execution (e.g. CREATE INDEX CONCURRENTLY, VACUUM)
+        // PostgreSQL simple query protocol requires separate statements to avoid implicit transaction block
+        const statements = splitSqlStatements(sqlContent);
+        for (const statement of statements) {
+          await client.unsafe(statement);
+        }
+        await client`
+          INSERT INTO _app_migrations (name, non_transactional, checksum)
+          VALUES (${file}, true, ${checksum})
+          ON CONFLICT (name) DO UPDATE 
+          SET non_transactional = true, checksum = ${checksum}
+        `;
+      } else {
+        // Standard transactional migration
+        await client.begin(async (sql) => {
+          await sql.unsafe(sqlContent);
+          await sql`
+            INSERT INTO _app_migrations (name, non_transactional, checksum)
+            VALUES (${file}, false, ${checksum})
+            ON CONFLICT (name) DO UPDATE 
+            SET non_transactional = false, checksum = ${checksum}
+          `;
+        });
+      }
 
       const elapsed = Math.round(performance.now() - start);
       console.log(`  ✓ Successfully applied ${file} in ${elapsed}ms!`);

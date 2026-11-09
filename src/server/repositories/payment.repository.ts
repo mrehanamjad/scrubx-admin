@@ -276,6 +276,63 @@ export class PaymentRepository {
       .where(eq(payments.status, "awaiting_verification"));
     return row?.count ?? 0;
   }
+
+  /**
+   * Reconciles order payments when an order is cancelled (BUG-007).
+   * - 'pending' | 'awaiting_verification' | 'rejected' -> 'failed', rejectionReason = 'Order cancelled'.
+   * - 'paid' -> leaves as 'paid' and sets metadata.refundRequired = true.
+   * - 'refunded' | 'failed' -> no change.
+   */
+  async markOrderPaymentsCancelled(
+    orderId: string,
+    tx: DatabaseExecutor
+  ): Promise<void> {
+    const orderPayments = await tx
+      .select()
+      .from(payments)
+      .where(eq(payments.orderId, orderId));
+
+    for (const payment of orderPayments) {
+      if (
+        payment.status === "pending" ||
+        payment.status === "awaiting_verification" ||
+        (payment.status as string) === "rejected"
+      ) {
+        const meta = (payment.metadata as Record<string, any>) || {};
+        const rejectionHistory = Array.isArray(meta.rejectionHistory) ? [...meta.rejectionHistory] : [];
+        rejectionHistory.push({
+          by: "system",
+          at: new Date().toISOString(),
+          reason: "Order cancelled",
+        });
+
+        await tx
+          .update(payments)
+          .set({
+            status: "failed",
+            rejectionReason: "Order cancelled",
+            metadata: {
+              ...meta,
+              rejectionHistory,
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(payments.id, payment.id));
+      } else if (payment.status === "paid") {
+        const meta = (payment.metadata as Record<string, any>) || {};
+        await tx
+          .update(payments)
+          .set({
+            metadata: {
+              ...meta,
+              refundRequired: true,
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(payments.id, payment.id));
+      }
+    }
+  }
 }
 
 export const paymentRepository = new PaymentRepository();

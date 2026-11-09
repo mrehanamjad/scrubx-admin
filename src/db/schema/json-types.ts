@@ -38,6 +38,27 @@ export interface PaymentRejectionRecord {
 }
 
 /**
+ * Record of an individual payment refund event.
+ */
+export interface PaymentRefundRecord {
+  amount: number;
+  reason: string;
+  refundedBy: string;
+  refundedAt: string;
+}
+
+/**
+ * Record of an administrative payment correction event.
+ */
+export interface PaymentCorrectionRecord {
+  by: string;
+  at: string;
+  from: string;
+  to: string;
+  note: string;
+}
+
+/**
  * Optional metadata for manual bank transfer or mobile wallet payment records.
  * Tracks ImageKit file ID, upload timestamps, and rejection audit history.
  */
@@ -46,6 +67,9 @@ export interface PaymentMetadata {
   imagekitFileId?: string;
   proofUploadedAt?: string;
   rejectionHistory?: PaymentRejectionRecord[];
+  refundRequired?: boolean;
+  refunds?: PaymentRefundRecord[];
+  corrections?: PaymentCorrectionRecord[];
 }
 
 /**

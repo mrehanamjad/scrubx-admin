@@ -164,33 +164,67 @@
 
 ---
 
-## 3. Remaining Implementation Phases
+## 3. Completed Phases (Phases 1 through 7)
 
-### Phase 6E: Incremental View Migration to React Server Components
-Migrate views screen-by-screen to consume domain Services/Repositories in Server Components and call Server Actions for mutations:
-- [ ] Screen 1: **Dashboard** (`/`) — Server query for KPIs, sales chart data, low stock alerts, pending orders.
-- [ ] Screen 2: **Products & Product View** (`/products`, `/products/[id]`) — RSC table with URL-driven filtering.
-- [ ] Screen 3: **Product Form** (`/products/new`, `/products/[id]/edit`) — Connect to `createProductAction` / `updateProductAction` with ImageKit.
-- [ ] Screen 4: **Categories** (`/categories`) — Hierarchical category tree query and Server Action mutations.
-- [ ] Screen 5: **Inventory** (`/inventory`) — Stock levels table and movement modal using Server Actions.
-- [ ] Screen 6: **Orders & Order Detail** (`/orders`, `/orders/[id]`) — Order queue and timeline actions.
-- [ ] Screen 7: **Payment Verification Queue** (`/payments`) — Screenshot verification queue with approve/reject actions.
-- [ ] Screen 8: **Customers & Customer Detail** (`/customers`, `/customers/[id]`) — Customer profile and address list.
-- [ ] Screen 9: **Coupons, Shipping, Payment Methods, Engraving** — Configuration tables with Server Actions.
-- [ ] Screen 10: **Store Settings** (`/settings`) — Key-value store configuration using `settingsService` and `updateStoreSettingAction`.
-- [ ] Global Navigation: Convert Topbar search to debounced server action; convert Sidebar badges to layout server queries.
-- [ ] Add `loading.tsx` skeletons and `error.tsx` error boundaries to all route subdirectories.
-
-### Phase 7: End-to-End Validation & Cleanup
-- [ ] Seed master catalog data into PostgreSQL.
-- [ ] Decommission `src/data/mock.ts` and `src/data/store.tsx`.
-- [ ] Remove `StoreProvider` from `src/components/providers.tsx`.
-- [ ] Final production build and test audit (`npm run build`).
+- [x] **Phase 1: Project Setup & Next.js 16 Foundation** (Completed)
+- [x] **Phase 2: Better Auth & RBAC Security Layer** (Completed)
+- [x] **Phase 3: Supabase PostgreSQL Schema & Migrations** (Completed)
+- [x] **Phase 4: ImageKit Media Integration** (Completed)
+- [x] **Phase 5: Backend Architecture Foundations** (Completed)
+- [x] **Phase 6A: Catalog Business Logic & Services** (Completed)
+- [x] **Phase 6B: Inventory Management & Stock Reservations** (Completed)
+- [x] **Phase 6C: Orders, Payments & Customer Verification** (Completed)
+- [x] **Phase 6D: Coupons, Shipping, Engraving & Store Settings** (Completed)
+- [x] **Phase 6E: View Migration to React Server Components (RSC)** (Completed November 2026)
+  - All 18 administration views migrated to Server Component data fetching and typed Server Action mutations.
+- [x] **Phase 7: End-to-End Database Integration & Mock Data Decommissioning** (Completed November 2026)
 
 ---
 
-## 4. Known Issues & Minor Warnings
+## 4. Completed Milestone: Production Remediation Execution (Batches B1–B14)
 
-1. **Next.js 16 Proxy Warning:** Build outputs `The "middleware" file convention is deprecated. Please use "proxy" instead.` This is an advisory warning for canary features; `middleware.ts` is fully supported and working.
-2. **ESLint `<img>` element warnings:** 13 warnings in legacy view files for unoptimized `<img>` tags. These will be replaced with Next.js `<Image />` + ImageKit loader in Phase 4/6.
-3. **Peer Dependency Flag:** `better-auth` requires `--legacy-peer-deps` when installing new packages due to an internal peerOptional constraint on `drizzle-orm`.
+The authoritative remediation specification located in [`docs/ai-context/PRODUCTION_REMEDIATION_PLAN.md`](file:///home/rehan/Downloads/scrubX-admin/docs/ai-context/PRODUCTION_REMEDIATION_PLAN.md) is **100% COMPLETE**.
+
+- **All 105 Remediation Issues (P0–P3) Fully Resolved & Verified**:
+  - **Batch 1 to 12 (B1–B12)**: Security, functional bugs, database constraints, performance optimizations, and architectural alignment.
+  - **Batch 13 (B13) — E-Commerce Lifecycle Completion**:
+    - `ECOM-001` (Unpaid Order Expiration cron job & alert banner).
+    - `ECOM-002` & `ECOM-003` (Returns & Product Exchanges / RMA workflows).
+    - `ECOM-004` & `ECOM-010` (Customer Notes pin/soft-delete & Unified Activity Feed).
+    - `ECOM-005` (Staff Team Management UI & Better Auth session revocation).
+    - `ECOM-006` (Duplicate TID Warning & Super Admin Override).
+    - `ECOM-007` (Printable Invoice & Packing Slip with `@media print` styling).
+    - `ECOM-008` (Orphan Media Asset Tracking & Cleanup).
+    - `ECOM-009` (Bulk Order Status Operations with floating action bar).
+    - `ECOM-011` (Stateful Read-Tracked Notifications).
+    - `ECOM-012` (Storefront Settings Contract & Registry).
+  - **Batch 14 (B14) — Automated Test Harness & Final CI Gates**:
+    - `TEST-001`: Vitest test runner configured with `npm test`, `test:watch`, `test:load`.
+    - `TEST-002`: Master declarative authorization matrix test suite (`test/unit/auth-matrix.test.ts`).
+    - `TEST-003`: DTO snapshots and anti-fabrication test suite (`test/unit/dto-snapshots.test.ts`).
+    - `TEST-004`: Concurrency and transaction invariants test suite (`test/integration/concurrency.test.ts`).
+    - `TEST-005`: Security assertions and proxy verification suite (`test/unit/security.test.ts`).
+    - `TEST-006`: 10 static regression guards (`scripts/check-guards.mjs`) wired into `npm run lint`.
+    - `TEST-007`: Zero-dependency load & capacity benchmark harness (`scripts/load-test.mjs`).
+    - `ARCH-009`: Multi-job GitHub Actions CI workflow (`.github/workflows/ci.yml`), PR template (`.github/pull_request_template.md`), and branch protection rules documented in `ARCHITECTURE.md`.
+    - `DB-016`: 100% schema parity across all 31 tables, columns, indexes, foreign keys, triggers, and RLS (`npm run db:parity`).
+
+---
+
+## 5. Architectural Conventions & Notes
+
+1. **Next.js 16 Proxy Convention:** `src/proxy.ts` replaces legacy middleware using an explicit inclusion matcher.
+2. **Peer Dependency Resolution (ARCH-008):** `drizzle-orm` upgraded to `^0.45.4` and `drizzle-kit` to `^0.31.11`, satisfying `better-auth@1.7.17` peer dependency contracts. Standard `npm ci` installs cleanly without `--legacy-peer-deps`.
+3. **Single Auth Module:** `src/server/auth.ts` is the single source of truth for administrative authentication and authorization. Role fallback to staff is strictly removed.
+
+---
+
+## 6. Security Advisory & Dependency Triage (ARCH-008)
+
+| Package | Advisory ID | Severity | Description | Production Reachability | Resolution / Mitigation |
+|---|---|---|---|---|---|
+| `drizzle-orm` | GHSA-gpj5-g38j-94v9 | High | SQL injection via improperly escaped SQL identifiers in older Drizzle ORM | **Direct runtime dependency** | **RESOLVED**: Upgraded `drizzle-orm` to `^0.45.4`. Vulnerability eliminated. |
+| `esbuild` | GHSA-67mh-4wv8-2f99 | Moderate | Dev server request reading vulnerability | **Not reachable** (CLI dev tooling via `drizzle-kit` only; not included in production server bundles) | **RESOLVED**: Upgraded `drizzle-kit` to `^0.31.11`. |
+| `minimatch` | GHSA-g3hv-75wg-m249 | Moderate | Potential denial of service via globparts amplification | **Not reachable** (Build/lint tooling dependency inside `@typescript-eslint` used solely during `npm run lint`) | Triaged as acceptable development-only risk; pending upstream `eslint-config-next` / `typescript-eslint` upgrade. |
+| `uuid` | GHSA-w5hq-g745-h8pq | Moderate | Missing buffer bounds check in v3/v5/v6 when `buf` is provided | **Not reachable** (`imagekit` SDK invokes `uuid.v4()` without buffer parameters) | Triaged as non-exploitable vendor dependency within `imagekit@^6.0.0`. |
+

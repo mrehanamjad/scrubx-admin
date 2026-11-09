@@ -20,8 +20,8 @@ export const submitPaymentProofAction = createSafeAction(
     schema: submitPaymentProofSchema,
     requiredRole: "staff",
   },
-  async ({ input }) => {
-    const updated = await paymentService.submitPaymentProof(input);
+  async ({ input, admin }) => {
+    const updated = await paymentService.submitPaymentProof(input, admin);
     revalidatePath("/payments");
     revalidatePath("/orders");
     return updated;

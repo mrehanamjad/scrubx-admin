@@ -29,6 +29,7 @@ import {
   AlertCircle,
   Clock,
   CheckSquare,
+  Printer,
 } from "lucide-react";
 import { Card, CardContent, CardHeader } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -72,6 +73,12 @@ import {
   updateOrderStatusAction,
   updateOrderShippingAction,
   addOrderNoteAction,
+  requestOrderReturnAction,
+  approveOrderReturnAction,
+  receiveOrderReturnAction,
+  completeOrderReturnAction,
+  createOrderExchangeAction,
+  getOrderReturnsAction,
 } from "../actions/orders";
 import {
   approvePaymentAction,
@@ -119,6 +126,7 @@ function getCourierTrackingUrl(courier: string, trackingNumber: string): string 
 
 // Allowed Next Order Lifecycle Transitions
 const ALLOWED_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  pending: ["confirmed", "cancelled"],
   awaiting_payment: ["confirmed", "cancelled"],
   payment_submitted: ["confirmed", "awaiting_payment", "cancelled"],
   pending_cod: ["confirmed", "cancelled"],
@@ -140,11 +148,13 @@ const ORDER_LIFECYCLE_STEPS: Array<{ key: OrderStatus; label: string }> = [
 interface OrderDetailProps {
   id?: string;
   initialOrder?: Order;
+  initialReturns?: any[];
 }
 
 export default function OrderDetailPage({
   id: propId,
   initialOrder,
+  initialReturns,
 }: OrderDetailProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -155,6 +165,22 @@ export default function OrderDetailPage({
   const [courier, setCourier] = useState(order?.courier ?? "TCS Express");
   const [tracking, setTracking] = useState(order?.trackingNumber ?? "");
   const [markShippedOnSave, setMarkShippedOnSave] = useState(false);
+
+  // Returns & Exchanges State (ECOM-002, ECOM-003)
+  const [orderReturns, setOrderReturns] = useState<any[]>(initialReturns || []);
+  const [returnModalOpen, setReturnModalOpen] = useState(false);
+  const [exchangeModalOpen, setExchangeModalOpen] = useState(false);
+  const [selectedReturnItems, setSelectedReturnItems] = useState<Record<string, { quantity: number; restock: boolean }>>({});
+  const [returnReason, setReturnReason] = useState("Defective / Sizing Issue");
+  const [returnNotes, setReturnNotes] = useState("");
+  const [exchangeItemId, setExchangeItemId] = useState(order?.items[0]?.id || "");
+  const [exchangeReplacementVariantId, setExchangeReplacementVariantId] = useState("");
+  const [exchangeQuantity, setExchangeQuantity] = useState(1);
+  const [exchangeReason, setExchangeReason] = useState("Exchange for different size");
+  const [completeReturnModalOpen, setCompleteReturnModalOpen] = useState(false);
+  const [activeReturnForCompletion, setActiveReturnForCompletion] = useState<any | null>(null);
+  const [completionRefundAmount, setCompletionRefundAmount] = useState("");
+  const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
 
   // Modals & Dialogs State
   const [proofOpen, setProofOpen] = useState(false);
@@ -202,6 +228,149 @@ export default function OrderDetailPage({
     setCopiedField(label);
     setTimeout(() => setCopiedField(null), 2000);
     toast({ title: `Copied ${label} to clipboard` });
+  };
+
+  const refreshReturns = async () => {
+    if (!order) return;
+    try {
+      const res = await getOrderReturnsAction({ orderId: order.id });
+      if (res.success && res.data) {
+        setOrderReturns(res.data);
+      }
+    } catch {
+      // non-fatal
+    }
+  };
+
+  const handleRequestReturn = async () => {
+    if (!order) return;
+    const items = Object.entries(selectedReturnItems)
+      .filter(([_, v]) => v.quantity > 0)
+      .map(([orderItemId, v]) => ({
+        orderItemId,
+        quantity: v.quantity,
+        restock: v.restock,
+      }));
+
+    if (items.length === 0) {
+      toast({ title: "No items selected", description: "Select at least one item to return.", variant: "error" });
+      return;
+    }
+
+    setIsSubmittingReturn(true);
+    try {
+      const res = await requestOrderReturnAction({
+        orderId: order.id,
+        reason: returnReason,
+        notes: returnNotes || undefined,
+        items,
+      });
+
+      if (res.success) {
+        toast({ title: "Return requested successfully", description: "Return authorization (RMA) created." });
+        setReturnModalOpen(false);
+        setSelectedReturnItems({});
+        await refreshReturns();
+        router.refresh();
+      } else {
+        toast({ title: "Failed to request return", description: res.error, variant: "error" });
+      }
+    } catch (err: any) {
+      toast({ title: "Error requesting return", description: err.message, variant: "error" });
+    } finally {
+      setIsSubmittingReturn(false);
+    }
+  };
+
+  const handleApproveReturn = async (returnId: string) => {
+    setIsSubmittingReturn(true);
+    try {
+      const res = await approveOrderReturnAction({ returnId });
+      if (res.success) {
+        toast({ title: "Return approved", description: "Awaiting customer shipment / warehouse receipt." });
+        await refreshReturns();
+        router.refresh();
+      } else {
+        toast({ title: "Failed to approve return", description: res.error, variant: "error" });
+      }
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "error" });
+    } finally {
+      setIsSubmittingReturn(false);
+    }
+  };
+
+  const handleReceiveReturn = async (returnId: string) => {
+    setIsSubmittingReturn(true);
+    try {
+      const res = await receiveOrderReturnAction({ returnId });
+      if (res.success) {
+        toast({ title: "Return received", description: "Eligible items restocked in warehouse inventory." });
+        await refreshReturns();
+        router.refresh();
+      } else {
+        toast({ title: "Failed to receive return", description: res.error, variant: "error" });
+      }
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "error" });
+    } finally {
+      setIsSubmittingReturn(false);
+    }
+  };
+
+  const handleCompleteReturn = async () => {
+    if (!activeReturnForCompletion) return;
+    setIsSubmittingReturn(true);
+    try {
+      const refundAmt = completionRefundAmount ? parseFloat(completionRefundAmount) : undefined;
+      const res = await completeOrderReturnAction({
+        returnId: activeReturnForCompletion.id,
+        refundAmount: refundAmt,
+      });
+      if (res.success) {
+        toast({ title: "Return completed", description: "Return completed and financial records reconciled." });
+        setCompleteReturnModalOpen(false);
+        setActiveReturnForCompletion(null);
+        await refreshReturns();
+        router.refresh();
+      } else {
+        toast({ title: "Failed to complete return", description: res.error, variant: "error" });
+      }
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "error" });
+    } finally {
+      setIsSubmittingReturn(false);
+    }
+  };
+
+  const handleCreateExchange = async () => {
+    if (!order || !exchangeItemId || !exchangeReplacementVariantId) {
+      toast({ title: "Missing fields", description: "Please select an item and replacement variant.", variant: "error" });
+      return;
+    }
+    setIsSubmittingReturn(true);
+    try {
+      const res = await createOrderExchangeAction({
+        orderId: order.id,
+        reason: exchangeReason,
+        returnItems: [{ orderItemId: exchangeItemId, quantity: exchangeQuantity }],
+        replacementVariantId: exchangeReplacementVariantId,
+        replacementQuantity: exchangeQuantity,
+      });
+
+      if (res.success) {
+        toast({ title: "Exchange created", description: "Return created and replacement inventory reserved." });
+        setExchangeModalOpen(false);
+        await refreshReturns();
+        router.refresh();
+      } else {
+        toast({ title: "Failed to create exchange", description: res.error, variant: "error" });
+      }
+    } catch (err: any) {
+      toast({ title: "Error creating exchange", description: err.message, variant: "error" });
+    } finally {
+      setIsSubmittingReturn(false);
+    }
   };
 
   // 1. ORDER LIFECYCLE HANDLERS
@@ -360,7 +529,9 @@ export default function OrderDetailPage({
 
         const res = await refundPaymentAction({
           paymentId: order.paymentId,
+          refundAmount: num,
           reason: fullReason,
+          restock: true,
         });
 
         if (res.success) {
@@ -472,8 +643,15 @@ export default function OrderDetailPage({
         orderId: order.id,
         courier: courier,
         trackingNumber: tracking.trim(),
-        markShipped: markShippedOnSave,
       });
+
+      if (res.success && markShippedOnSave && order.status === "processing") {
+        await updateOrderStatusAction({
+          orderId: order.id,
+          status: "shipped",
+          note: `Shipped via ${courier} (${tracking.trim()})`,
+        });
+      }
 
       if (res.success) {
         toast({
@@ -581,6 +759,24 @@ export default function OrderDetailPage({
         description={`Placed ${formatDate(order.date)} at ${formatDateTime(order.date).split("at")[1] || ""} · ${order.items.length} line item${order.items.length === 1 ? "" : "s"}`}
         actions={
           <div className="flex flex-wrap items-center gap-2.5">
+            <Link
+              href={`/orders/${order.id}/print?doc=invoice`}
+              target="_blank"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-ink hover:bg-surface-muted transition-colors shadow-2xs"
+              title="Print Tax Invoice"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Print</span> Invoice
+            </Link>
+            <Link
+              href={`/orders/${order.id}/print?doc=packing-slip`}
+              target="_blank"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-ink hover:bg-surface-muted transition-colors shadow-2xs"
+              title="Print Packing Slip"
+            >
+              <Package className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Packing</span> Slip
+            </Link>
             <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 shadow-2xs">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
                 Order:
@@ -870,6 +1066,170 @@ export default function OrderDetailPage({
               </CardContent>
             </Card>
           )}
+
+          {/* Returns & Exchanges (RMA) Card */}
+          <Card className="border-line shadow-2xs">
+            <CardHeader className="flex-row items-center justify-between gap-3 border-b border-line pb-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <RotateCcw className="h-4 w-4 text-brand-700" />
+                  <h2 className="text-[15px] font-semibold text-ink">Returns & Exchanges (RMA)</h2>
+                </div>
+                <p className="text-[12.5px] text-ink-muted">
+                  Process reverse logistics, inspect returned items, and trigger automated stock restock.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const initialSelections: Record<string, { quantity: number; restock: boolean }> = {};
+                    order.items.forEach((item) => {
+                      initialSelections[item.id] = { quantity: item.quantity, restock: true };
+                    });
+                    setSelectedReturnItems(initialSelections);
+                    setReturnModalOpen(true);
+                  }}
+                  disabled={isCancelled}
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Request Return
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setExchangeItemId(order.items[0]?.id || "");
+                    setExchangeModalOpen(true);
+                  }}
+                  disabled={isCancelled}
+                  className="h-8 gap-1.5 text-xs"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Request Exchange
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4 pt-5">
+              {orderReturns.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-line p-6 text-center text-xs text-ink-muted">
+                  No return or exchange requests have been initiated for this order.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {orderReturns.map((ret) => (
+                    <div
+                      key={ret.id}
+                      className="rounded-lg border border-line bg-surface p-4 shadow-2xs space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-semibold text-ink">
+                            RMA-{ret.id.slice(0, 8).toUpperCase()}
+                          </span>
+                          <Badge
+                            variant={
+                              ret.status === "completed"
+                                ? "success"
+                                : ret.status === "received"
+                                ? "brand"
+                                : ret.status === "approved"
+                                ? "purple"
+                                : ret.status === "rejected"
+                                ? "danger"
+                                : "outline"
+                            }
+                          >
+                            {ret.status.toUpperCase()}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          {ret.status === "requested" && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7 text-xs bg-brand-700 hover:bg-brand-800"
+                              onClick={() => handleApproveReturn(ret.id)}
+                              disabled={isSubmittingReturn}
+                            >
+                              Approve Return
+                            </Button>
+                          )}
+                          {ret.status === "approved" && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7 text-xs bg-indigo-700 hover:bg-indigo-800"
+                              onClick={() => handleReceiveReturn(ret.id)}
+                              disabled={isSubmittingReturn}
+                            >
+                              Receive & Restock
+                            </Button>
+                          )}
+                          {ret.status === "received" && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7 text-xs bg-emerald-700 hover:bg-emerald-800"
+                              onClick={() => {
+                                setActiveReturnForCompletion(ret);
+                                setCompletionRefundAmount(ret.refundAmount ? String(ret.refundAmount) : "");
+                                setCompleteReturnModalOpen(true);
+                              }}
+                              disabled={isSubmittingReturn}
+                            >
+                              Complete Return
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2 text-xs sm:grid-cols-2">
+                        <div>
+                          <span className="text-ink-muted">Reason:</span>{" "}
+                          <span className="font-medium text-ink">{ret.reason}</span>
+                        </div>
+                        {ret.refundAmount && (
+                          <div>
+                            <span className="text-ink-muted">Refund Amount:</span>{" "}
+                            <span className="font-bold text-ink font-mono">{formatPKR(Number(ret.refundAmount))}</span>
+                          </div>
+                        )}
+                        {ret.notes && (
+                          <div className="col-span-2 text-[12px] text-ink-soft bg-surface-muted/50 p-2 rounded border border-line">
+                            {ret.notes}
+                          </div>
+                        )}
+                      </div>
+
+                      {ret.items && ret.items.length > 0 && (
+                        <div className="rounded border border-line/70 bg-surface-muted/30 p-2.5 text-xs">
+                          <p className="font-semibold text-ink-soft mb-1.5 text-[11px] uppercase tracking-wider">Returned Items:</p>
+                          <div className="space-y-1">
+                            {ret.items.map((it: any) => {
+                              const orderItem = order.items.find((oi) => oi.id === it.orderItemId);
+                              return (
+                                <div key={it.id} className="flex items-center justify-between text-ink">
+                                  <span>
+                                    {orderItem ? `${orderItem.productName} (${orderItem.colorName || "Standard"}, ${orderItem.size || "M"})` : `Item ${it.orderItemId}`}
+                                  </span>
+                                  <span className="font-medium">
+                                    Qty: {it.quantity} {it.restock ? "(Restocked)" : "(Damaged / Discarded)"}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           {/* 4. INDEPENDENT PAYMENT MANAGEMENT CARD */}
           <Card className="border-line shadow-2xs">
@@ -1732,6 +2092,270 @@ export default function OrderDetailPage({
               onClick={handleMarkAsPaidManual}
             >
               {isSubmittingPayment ? "Recording..." : "Confirm Paid"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* F. REQUEST RETURN MODAL (ECOM-002) */}
+      <Dialog open={returnModalOpen} onOpenChange={setReturnModalOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-brand-800 flex items-center gap-2">
+              <RotateCcw className="h-5 w-5" />
+              Request Return (RMA) — {order.orderNumber}
+            </DialogTitle>
+            <DialogDescription>
+              Select line items to return, indicate quantities, and specify return reason.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Select Items to Return</Label>
+              <div className="divide-y divide-line rounded-lg border border-line bg-surface p-2 space-y-2">
+                {order.items.map((item) => {
+                  const sel = selectedReturnItems[item.id] || { quantity: 0, restock: true };
+                  const isChecked = sel.quantity > 0;
+                  return (
+                    <div key={item.id} className="pt-2 first:pt-0 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-ink">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              setSelectedReturnItems((prev) => ({
+                                ...prev,
+                                [item.id]: {
+                                  quantity: e.target.checked ? item.quantity : 0,
+                                  restock: prev[item.id]?.restock ?? true,
+                                },
+                              }));
+                            }}
+                            className="h-4 w-4 rounded border-line text-brand-600 focus:ring-brand-500"
+                          />
+                          <span>{item.productName} ({item.colorName || "Standard"}, Size {item.size || "M"})</span>
+                        </label>
+                        <span className="text-xs text-ink-muted">Ordered: {item.quantity}</span>
+                      </div>
+                      {isChecked && (
+                        <div className="pl-6 flex items-center gap-4 text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-ink-muted">Qty:</span>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={item.quantity}
+                              value={sel.quantity}
+                              onChange={(e) => {
+                                const val = Math.min(item.quantity, Math.max(1, parseInt(e.target.value) || 1));
+                                setSelectedReturnItems((prev) => ({
+                                  ...prev,
+                                  [item.id]: { ...prev[item.id], quantity: val },
+                                }));
+                              }}
+                              className="h-7 w-16 text-center text-xs"
+                            />
+                          </div>
+                          <label className="flex items-center gap-1.5 cursor-pointer text-ink-soft">
+                            <input
+                              type="checkbox"
+                              checked={sel.restock}
+                              onChange={(e) => {
+                                setSelectedReturnItems((prev) => ({
+                                  ...prev,
+                                  [item.id]: { ...prev[item.id], restock: e.target.checked },
+                                }));
+                              }}
+                              className="h-3.5 w-3.5 rounded border-line"
+                            />
+                            Restock upon receipt
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="returnReasonSelect" className="text-xs font-semibold">
+                Reason for Return
+              </Label>
+              <Select value={returnReason} onValueChange={setReturnReason}>
+                <SelectTrigger id="returnReasonSelect" className="text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Defective / Sizing Issue">Defective / Sizing Issue</SelectItem>
+                  <SelectItem value="Incorrect Item Shipped">Incorrect Item Shipped</SelectItem>
+                  <SelectItem value="Damaged in Transit">Damaged in Transit</SelectItem>
+                  <SelectItem value="Customer Dissatisfaction">Customer Dissatisfaction</SelectItem>
+                  <SelectItem value="Exchange Required">Exchange Required</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="returnNotesInput" className="text-xs font-semibold">
+                Internal Return Notes (Optional)
+              </Label>
+              <Textarea
+                id="returnNotesInput"
+                rows={2}
+                value={returnNotes}
+                onChange={(e) => setReturnNotes(e.target.value)}
+                placeholder="Additional details regarding return condition or customer agreement…"
+                className="text-xs"
+              />
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setReturnModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              className="bg-brand-700 hover:bg-brand-800 text-white"
+              disabled={isSubmittingReturn}
+              onClick={handleRequestReturn}
+            >
+              {isSubmittingReturn ? "Creating..." : "Submit Return Authorization"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* G. REQUEST EXCHANGE MODAL (ECOM-003) */}
+      <Dialog open={exchangeModalOpen} onOpenChange={setExchangeModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-indigo-800 flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              Request Product Exchange — {order.orderNumber}
+            </DialogTitle>
+            <DialogDescription>
+              Select an item to return and specify the replacement variant to reserve.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="exchangeItemSelect" className="text-xs font-semibold">
+                Item to Exchange
+              </Label>
+              <Select value={exchangeItemId} onValueChange={setExchangeItemId}>
+                <SelectTrigger id="exchangeItemSelect" className="text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {order.items.map((it) => (
+                    <SelectItem key={it.id} value={it.id}>
+                      {it.productName} ({it.colorName || "Standard"}, {it.size || "M"})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="replacementVariantInput" className="text-xs font-semibold">
+                Replacement Variant UUID
+              </Label>
+              <Input
+                id="replacementVariantInput"
+                value={exchangeReplacementVariantId}
+                onChange={(e) => setExchangeReplacementVariantId(e.target.value)}
+                placeholder="e.g. 00000000-0000-0000-0000-000000000000"
+                className="text-xs font-mono"
+              />
+              <p className="text-[11px] text-ink-muted">
+                Enter the product variant UUID to reserve for the replacement.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="exchangeQuantityInput" className="text-xs font-semibold">
+                Replacement Quantity
+              </Label>
+              <Input
+                id="exchangeQuantityInput"
+                type="number"
+                min={1}
+                value={exchangeQuantity}
+                onChange={(e) => setExchangeQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                className="text-xs"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="exchangeReasonInput" className="text-xs font-semibold">
+                Exchange Reason
+              </Label>
+              <Input
+                id="exchangeReasonInput"
+                value={exchangeReason}
+                onChange={(e) => setExchangeReason(e.target.value)}
+                placeholder="e.g. Size exchange (Medium to Large)"
+                className="text-xs"
+              />
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExchangeModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              className="bg-indigo-700 hover:bg-indigo-800 text-white"
+              disabled={isSubmittingReturn || !exchangeReplacementVariantId.trim()}
+              onClick={handleCreateExchange}
+            >
+              {isSubmittingReturn ? "Creating..." : "Confirm Exchange"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* H. COMPLETE RETURN MODAL */}
+      <Dialog open={completeReturnModalOpen} onOpenChange={setCompleteReturnModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-emerald-800 flex items-center gap-2">
+              <CheckSquare className="h-5 w-5" />
+              Complete Return RMA
+            </DialogTitle>
+            <DialogDescription>
+              Confirm completion of the return process and record optional refund issued.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-3">
+            <div>
+              <Label htmlFor="completionRefundInput" className="text-xs font-semibold">
+                Refund Amount Settled (PKR, Optional)
+              </Label>
+              <Input
+                id="completionRefundInput"
+                type="number"
+                step="0.01"
+                value={completionRefundAmount}
+                onChange={(e) => setCompletionRefundAmount(e.target.value)}
+                placeholder="Leave blank if no refund issued"
+                className="mt-1.5 text-xs font-mono"
+              />
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setCompleteReturnModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              className="bg-emerald-700 hover:bg-emerald-800 text-white"
+              disabled={isSubmittingReturn}
+              onClick={handleCompleteReturn}
+            >
+              {isSubmittingReturn ? "Completing..." : "Complete Return"}
             </Button>
           </DialogFooter>
         </DialogContent>

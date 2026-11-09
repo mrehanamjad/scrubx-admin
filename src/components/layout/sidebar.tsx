@@ -16,8 +16,10 @@ import {
   Truck,
   Users,
   Wallet,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { can } from "../../lib/permissions";
 
 interface NavItem {
   to: string;
@@ -31,10 +33,12 @@ export function SidebarNav({
   onNavigate,
   pendingPayments = 0,
   lowStock = 0,
+  userRole,
 }: {
   onNavigate?: () => void;
   pendingPayments?: number;
   lowStock?: number;
+  userRole?: string;
 }) {
   const pathname = usePathname() || "";
 
@@ -66,7 +70,12 @@ export function SidebarNav({
         { to: "/payment-methods", label: "Payment Methods", icon: Wallet },
         { to: "/engraving", label: "Engraving Options", icon: PenTool },
         { to: "/shipping", label: "Shipping", icon: Truck },
-        { to: "/settings", label: "Store Settings", icon: Settings },
+        ...(userRole === "super_admin"
+          ? [{ to: "/staff", label: "Staff Team", icon: ShieldCheck }]
+          : []),
+        ...(can(userRole, "settings:write")
+          ? [{ to: "/settings", label: "Store Settings", icon: Settings }]
+          : []),
       ],
     },
   ];

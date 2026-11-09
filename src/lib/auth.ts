@@ -4,6 +4,46 @@ import { admin } from "better-auth/plugins";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema/index.ts";
 
+function requireAuthSecret(): string {
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (!secret || secret.trim().length === 0) {
+    throw new Error("Missing required environment variable: BETTER_AUTH_SECRET");
+  }
+  if (secret.length < 32) {
+    throw new Error("Environment variable BETTER_AUTH_SECRET must be at least 32 characters long");
+  }
+  return secret;
+}
+
+function getTrustedOrigins(): string[] {
+  if (process.env.BETTER_AUTH_TRUSTED_ORIGINS) {
+    return process.env.BETTER_AUTH_TRUSTED_ORIGINS.split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+  }
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (appUrl) {
+    return [appUrl];
+  }
+  if (process.env.NODE_ENV !== "production") {
+    return ["http://localhost:3000"];
+  }
+  throw new Error("Missing required environment variable: NEXT_PUBLIC_APP_URL or BETTER_AUTH_TRUSTED_ORIGINS");
+}
+
+function getBaseUrl(): string {
+  if (process.env.BETTER_AUTH_URL) {
+    return process.env.BETTER_AUTH_URL;
+  }
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  if (process.env.NODE_ENV !== "production") {
+    return "http://localhost:3000";
+  }
+  throw new Error("Missing required environment variable: BETTER_AUTH_URL or NEXT_PUBLIC_APP_URL");
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -43,16 +83,11 @@ export const auth = betterAuth({
       maxAge: 5 * 60, // 5 minutes cache
     },
   },
-  trustedOrigins: [
-    process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
-  ],
-  secret:
-    process.env.BETTER_AUTH_SECRET ||
-    "17f75554cdebbee61b5ca2302d9c636a05f834859ddb54538c9f43642e2158bc",
-  baseURL:
-    process.env.BETTER_AUTH_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    "http://localhost:3000",
+  trustedOrigins: getTrustedOrigins(),
+  get secret() {
+    return requireAuthSecret();
+  },
+  baseURL: getBaseUrl(),
 });
 
 export type Session = typeof auth.$Infer.Session;

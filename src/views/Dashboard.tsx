@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -39,7 +39,6 @@ import {
 import { PageHeader } from "../components/shared/page-header";
 import { ProductThumb } from "../components/shared/thumb";
 import { OrderStatusBadge } from "../components/shared/status-badges";
-import { useSimulatedLoading } from "../components/shared/use-simulated-loading";
 import { Skeleton } from "../components/ui/skeleton";
 import { formatDate, formatPKR } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -63,6 +62,10 @@ export interface DashboardProps {
     product: { id: string; name: string };
     variant: { id: string; name: string; sku: string; stock: number; reorderLevel: number; price: number };
   }>;
+  chartData?: Array<{ label: string; revenue: number; orders: number }>;
+  previousPeriod?: { currentTotal: number; previousTotal: number; change: number };
+  statusBreakdown?: Array<{ status: OrderStatus; count: number; label: string; value: number }>;
+  topProducts?: Array<{ id: string; name: string; units: number; revenue: number; image: string }>;
 }
 
 const PERIOD_LABEL: Record<Period, string> = {
@@ -89,12 +92,19 @@ export default function Dashboard({
   initialMetrics,
   initialPeriod = "30d",
   lowStockItems = [],
+  chartData: propChartData,
+  previousPeriod: propPreviousPeriod,
+  statusBreakdown: propStatusBreakdown,
+  topProducts: propTopProducts,
 }: DashboardProps = {}) {
   const router = useRouter();
   const [period, setPeriod] = useState<Period>(initialPeriod);
-  const simulatedLoading = useSimulatedLoading(400);
+  const loading = false;
   const isRealData = Boolean(initialOrders.length > 0 || initialMetrics);
-  const loading = isRealData ? false : simulatedLoading;
+
+  useEffect(() => {
+    setPeriod(initialPeriod);
+  }, [initialPeriod]);
 
   const orders = initialOrders;
   const billable = orders.filter((o) => o.status !== "cancelled" && o.status !== "refunded");
@@ -109,7 +119,7 @@ export default function Dashboard({
   const totalUnits = initialMetrics ? initialMetrics.totalUnits : 0;
   const totalProductsCount = initialMetrics ? initialMetrics.totalProducts : 0;
 
-  const previousPeriod = useMemo(() => {
+  const fallbackPreviousPeriod = useMemo(() => {
     const now = Date.now();
     const ranges: Record<Period, number> = { "7d": 7, "30d": 30, "90d": 90, "12m": 365 };
     const span = ranges[period];
@@ -124,7 +134,9 @@ export default function Dashboard({
     return { currentTotal, previousTotal, change };
   }, [billable, period]);
 
-  const chartData = useMemo(() => {
+  const previousPeriod = propPreviousPeriod ?? fallbackPreviousPeriod;
+
+  const fallbackChartData = useMemo(() => {
     const now = new Date();
     const buckets: { label: string; revenue: number; orders: number }[] = [];
 
@@ -187,7 +199,9 @@ export default function Dashboard({
     return buckets;
   }, [billable, period]);
 
-  const statusBreakdown = useMemo(() => {
+  const chartData = propChartData ?? fallbackChartData;
+
+  const fallbackStatusBreakdown = useMemo(() => {
     const counts = new Map<OrderStatus, number>();
     orders.forEach((o) => counts.set(o.status, (counts.get(o.status) ?? 0) + 1));
     return [...counts.entries()]
@@ -200,7 +214,9 @@ export default function Dashboard({
       .sort((a, b) => b.count - a.count);
   }, [orders]);
 
-  const topProducts = useMemo(() => {
+  const statusBreakdown = propStatusBreakdown ?? fallbackStatusBreakdown;
+
+  const fallbackTopProducts = useMemo(() => {
     const map = new Map<string, { name: string; units: number; revenue: number; image: string }>();
     billable.forEach((order) =>
       order.items.forEach((item) => {
@@ -220,6 +236,8 @@ export default function Dashboard({
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 5);
   }, [billable]);
+
+  const topProducts = propTopProducts ?? fallbackTopProducts;
 
   const lowStock = useMemo(() => {
     return lowStockItems.slice(0, 6);

@@ -31,7 +31,7 @@ This repository contains the **ScrubX Admin Panel**, an internal operations plat
 | **Database** | Managed PostgreSQL (Supabase) | PostgreSQL `17.x` | Relational database (24 tables, RLS lockdown) |
 | **ORM & Migrations** | Drizzle ORM / Drizzle Kit | `^0.38.4` / `^0.30.2` | Type-safe SQL queries, schema definitions, migration CLI |
 | **Authentication** | Better Auth | `^1.7.17` | Self-hosted PostgreSQL auth, sessions, RBAC, edge route protection |
-| **Media Storage** *(Planned)* | ImageKit | — | Product photography, payment proof screenshots, logo uploads |
+| **Media Storage** | ImageKit (`imagekit` / `@imagekit/next`) | `^6.0.0` | Product photography, payment proof screenshots, logo uploads |
 | **Validation** | Zod / React Hook Form | `^4.6.7` / `^7.91.0` | Server Action schemas and client form validation |
 
 ---
@@ -52,7 +52,7 @@ This repository contains the **ScrubX Admin Panel**, an internal operations plat
 1. **Strictly Managed PostgreSQL (No Supabase Auth / No Supabase Storage):**
    - Supabase is used **only** as a managed PostgreSQL hosting layer.
    - Authentication is handled exclusively by **Better Auth** (storing credentials in `ba_*` tables).
-   - Media storage is planned exclusively for **ImageKit**.
+   - Media storage is handled exclusively by **ImageKit** (`imagekit` SDK and direct client uploads).
    - Supabase client libraries (`@supabase/supabase-js`, `@supabase/auth-helpers`) MUST NOT be installed or used.
 2. **Zero Direct Client Database Access:**
    - Database operations are strictly server-only (`src/db/`).
@@ -65,5 +65,5 @@ This repository contains the **ScrubX Admin Panel**, an internal operations plat
    - Never use floating point math for prices or totals.
 5. **Business Rule Database Triggers:**
    - Orders with custom engraving **cannot** select Cash on Delivery (COD) as a payment method. This is enforced at the database level via the `check_engraving_cod_rule` trigger.
-6. **Non-Destructive Development:**
-   - Existing mock data (`src/data/mock.ts`) and client store (`src/data/store.tsx`) must remain functional until their respective domain screens are migrated to live database Server Actions.
+6. **Server Actions First Architecture:**
+   - All 18 administrative views are fully wired to live database Server Components and Server Actions. Legacy mock data in `src/data/*` is deprecated.

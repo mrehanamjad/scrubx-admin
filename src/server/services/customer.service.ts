@@ -4,6 +4,7 @@ import {
   CustomerRepository,
   type CustomerListItem,
   type CustomerDetail,
+  type CustomerDetailNote,
 } from "../repositories/customer.repository.ts";
 import type { DatabaseExecutor } from "../repositories/base.repository.ts";
 import { assertRole, type AdminContext } from "../auth.ts";
@@ -15,7 +16,7 @@ import type {
   DeleteCustomerAddressInput,
 } from "../validation/customers.ts";
 import type { PaginatedResult } from "../types.ts";
-import type { Address, Customer } from "../../db/schema/index.ts";
+import type { Address, Customer, CustomerNote } from "../../db/schema/index.ts";
 
 export class CustomerService {
   private readonly repo: CustomerRepository;
@@ -72,6 +73,7 @@ export class CustomerService {
   async findOrCreateCustomer(
     data: {
       email: string;
+      userId?: string | null;
       firstName?: string | null;
       lastName?: string | null;
       phone?: string | null;
@@ -139,6 +141,66 @@ export class CustomerService {
       throw new NotFoundError("Customer address", input.addressId);
     }
     return true;
+  }
+
+  /**
+   * Appends an audit-tracked administrative staff note to a customer.
+   * Requires administrator role.
+   */
+  async addNote(
+    customerId: string,
+    body: string,
+    admin: AdminContext,
+    isPinned: boolean = false
+  ): Promise<CustomerNote> {
+    assertRole(admin, ["admin"]);
+    const customer = await this.repo.findById(customerId);
+    if (!customer) {
+      throw new NotFoundError("Customer", customerId);
+    }
+    return this.repo.addNote(customerId, body, admin.id, isPinned);
+  }
+
+  /**
+   * Retrieves all notes for a customer ordered from newest to oldest.
+   * Requires at least staff role.
+   */
+  async listNotes(
+    customerId: string,
+    admin: AdminContext
+  ): Promise<CustomerDetailNote[]> {
+    assertRole(admin, ["staff"]);
+    return this.repo.listNotes(customerId);
+  }
+
+  /**
+   * Deletes an administrative note (soft-delete).
+   * Requires super_admin role.
+   */
+  async deleteNote(
+    id: string,
+    admin: AdminContext
+  ): Promise<boolean> {
+    assertRole(admin, ["super_admin"]);
+    const deleted = await this.repo.deleteNote(id, admin.id);
+    if (!deleted) {
+      throw new NotFoundError("Customer note", id);
+    }
+    return true;
+  }
+
+  /**
+   * ECOM-010: Retrieves unified customer activity timeline.
+   * Requires at least staff role.
+   */
+  async getActivityFeed(
+    customerId: string,
+    admin: AdminContext,
+    limit: number = 50,
+    before?: Date
+  ) {
+    assertRole(admin, ["staff"]);
+    return this.repo.getActivityFeed(customerId, limit, before);
   }
 }
 

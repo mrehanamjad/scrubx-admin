@@ -10,6 +10,7 @@ import {
   updateProductSchema,
   archiveProductSchema,
   deleteProductSchema,
+  detachProductImageSchema,
 } from "../server/validation/catalog.ts";
 
 /**
@@ -108,6 +109,24 @@ export const deleteProductAction = createSafeAction(
     revalidatePath("/products");
     revalidatePath("/categories");
     revalidatePath("/inventory");
+    return result;
+  }
+);
+
+/**
+ * Server Action: Detach and permanently delete a product image.
+ * Post-commit purges asset from ImageKit.
+ * Strictly requires administrator (admin or super_admin) privileges.
+ */
+export const detachProductImageAction = createSafeAction(
+  {
+    schema: detachProductImageSchema,
+    requiredRole: "admin",
+  },
+  async ({ input, admin }) => {
+    const result = await productService.detachImage(input, admin);
+    revalidatePath("/products");
+    revalidatePath(`/products/${input.productId}`);
     return result;
   }
 );

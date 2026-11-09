@@ -7,6 +7,7 @@ export type ActionResponse<T = void> =
   | {
       success: true;
       data: T;
+      requestId?: string;
       error?: never;
       code?: never;
       fieldErrors?: never;
@@ -15,6 +16,7 @@ export type ActionResponse<T = void> =
       success: false;
       error: string;
       code?: string;
+      requestId?: string;
       fieldErrors?: Record<string, string[]>;
       data?: never;
     };

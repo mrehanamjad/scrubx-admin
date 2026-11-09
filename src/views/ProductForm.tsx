@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useParams } from "next/navigation";
@@ -49,8 +49,8 @@ import { PageHeader } from "../components/shared/page-header";
 import { ProductStatusBadge } from "../components/shared/status-badges";
 import { ConfirmDialog } from "../components/shared/confirm-dialog";
 import { useToast } from "../components/ui/toast";
+import { useCan } from "../components/providers/role-provider";
 import { ImageUpload, type UploadedMedia } from "../components/shared/image-upload";
-import { deleteMediaAction } from "../actions/media";
 import { COLOR_LIBRARY } from "../lib/constants";
 import { formatPKR } from "../lib/format";
 import { cn, slugify, uid } from "../lib/utils";
@@ -102,6 +102,610 @@ const colorCode = (name: string) => name.split(" ")[0].slice(0, 3).toUpperCase()
 const sizeCode = (size: string) =>
   size.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 3) || "OS";
 
+interface ColorEditorProps {
+  colors: ProductColor[];
+  editingColorId: string | null;
+  colorDraft: { name: string; hex: string };
+  onSetEditingColorId: (id: string | null) => void;
+  onUpdateColor: (colorId: string, patch: Partial<ProductColor>) => void;
+  onRemoveColor: (colorId: string) => void;
+  onSetColorDraft: React.Dispatch<React.SetStateAction<{ name: string; hex: string }>>;
+  onAddColor: () => void;
+}
+
+const ColorEditor = React.memo(function ColorEditor({
+  colors,
+  editingColorId,
+  colorDraft,
+  onSetEditingColorId,
+  onUpdateColor,
+  onRemoveColor,
+  onSetColorDraft,
+  onAddColor,
+}: ColorEditorProps) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[15px] font-semibold text-ink">Colours</h2>
+          <p className="text-[12.5px] text-ink-muted">
+            Add at least one colour to generate variants and associate photos.
+          </p>
+        </div>
+        <Badge variant="brand">
+          <Palette className="h-3 w-3" />
+          {colors.length} colour{colors.length === 1 ? "" : "s"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {colors.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-line-strong bg-surface-muted/50 px-4 py-8 text-center">
+            <Palette className="mx-auto h-5 w-5 text-ink-muted" />
+            <p className="mt-2 text-[13px] font-medium text-ink">No colours yet</p>
+            <p className="text-[12px] text-ink-muted">
+              Add a colour to unlock colour-specific images and variants.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {colors.map((color) => (
+              <div
+                key={color.id}
+                className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-surface px-3 py-2.5"
+              >
+                <span
+                  className="h-7 w-7 shrink-0 rounded-full border border-line-strong"
+                  style={{ backgroundColor: color.hex }}
+                />
+                {editingColorId === color.id ? (
+                  <>
+                    <Input
+                      defaultValue={color.name}
+                      className="h-8 w-44"
+                      onBlur={(e) => {
+                        onUpdateColor(color.id, { name: e.target.value });
+                        onSetEditingColorId(null);
+                      }}
+                    />
+                    <input
+                      type="color"
+                      value={color.hex}
+                      className="h-8 w-10 cursor-pointer rounded border border-line-strong bg-surface p-0.5"
+                      onChange={(e) => onUpdateColor(color.id, { hex: e.target.value })}
+                    />
+                    <Button type="button" size="sm" variant="ghost" onClick={() => onSetEditingColorId(null)}>
+                      Done
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-ink">{color.name}</p>
+                      <p className="font-mono text-[11.5px] text-ink-muted">{color.hex}</p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onSetEditingColorId(color.id)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      onClick={() => onRemoveColor(color.id)}
+                      aria-label={`Remove ${color.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="rounded-lg border border-line bg-surface-muted/50 p-3.5">
+          <Label htmlFor="colorName">Add a colour</Label>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Input
+              id="colorName"
+              value={colorDraft.name}
+              onChange={(e) => onSetColorDraft((prev) => ({ ...prev, name: e.target.value }))}
+              placeholder="e.g. Peacock Teal"
+              className="h-9 w-52"
+            />
+            <input
+              type="color"
+              aria-label="Pick colour"
+              value={colorDraft.hex}
+              onChange={(e) => onSetColorDraft((prev) => ({ ...prev, hex: e.target.value }))}
+              className="h-9 w-12 cursor-pointer rounded-md border border-line-strong bg-surface p-1"
+            />
+            <Button type="button" variant="outline" onClick={onAddColor}>
+              <Plus className="h-4 w-4" />
+              Add colour
+            </Button>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11.5px] text-ink-muted">Quick picks:</span>
+            {COLOR_LIBRARY.slice(0, 10).map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                title={preset.name}
+                onClick={() => onSetColorDraft((prev) => ({ ...prev, name: preset.name, hex: preset.hex }))}
+                className="h-6 w-6 rounded-full border border-line-strong transition-transform hover:scale-110"
+                style={{ backgroundColor: preset.hex }}
+              />
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
+interface ImagePanelProps {
+  images: ProductImage[];
+  colors: ProductColor[];
+  imageColor: string;
+  imageUrl: string;
+  onSetImageUrl: (url: string) => void;
+  onSetImageColor: (colorId: string) => void;
+  onAddImage: (url: string, colorId: string | null) => void;
+  onAddUploadedMedia: (mediaList: UploadedMedia | UploadedMedia[]) => void;
+  onMoveImage: (imageId: string, direction: -1 | 1) => void;
+  onRemoveImage: (imageId: string) => void;
+  onSetMainImage: (imageId: string) => void;
+}
+
+const ImagePanel = React.memo(function ImagePanel({
+  images,
+  colors,
+  imageColor,
+  imageUrl,
+  onSetImageUrl,
+  onSetImageColor,
+  onAddImage,
+  onAddUploadedMedia,
+  onMoveImage,
+  onRemoveImage,
+  onSetMainImage,
+}: ImagePanelProps) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-3">
+        <div>
+          <h2 className="text-[15px] font-semibold text-ink">Product images</h2>
+          <p className="text-[12.5px] text-ink-muted">
+            Shared images are used when no colour is selected; colour images override them.
+          </p>
+        </div>
+        <Badge variant="navy">
+          <ImagePlus className="h-3 w-3" />
+          {images.length} image{images.length === 1 ? "" : "s"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <ImageUpload
+          folder="/scrubx/products"
+          multiple={true}
+          colorOptions={colors}
+          selectedColorId={imageColor === "shared" ? null : imageColor}
+          onColorChange={(cId) => onSetImageColor(cId ?? "shared")}
+          onUploadSuccess={onAddUploadedMedia}
+          helperText="Upload product photos directly to ImageKit CDN."
+        />
+
+        {images.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-line-strong bg-surface-muted/50 px-4 py-8 text-center">
+            <ImagePlus className="mx-auto h-5 w-5 text-ink-muted" />
+            <p className="mt-2 text-[13px] font-medium text-ink">No images uploaded</p>
+            <p className="text-[12px] text-ink-muted">
+              Upload photos above, add an image URL below, or pick one from the mock library.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {images.map((image, index) => (
+              <div
+                key={image.id}
+                className={cn(
+                  "group relative overflow-hidden rounded-lg border bg-surface",
+                  image.isMain ? "border-brand-400 ring-2 ring-brand-100" : "border-line",
+                )}
+              >
+                <div className="relative aspect-square w-full overflow-hidden bg-surface-muted">
+                  <Image
+                    src={image.url}
+                    alt={image.alt}
+                    fill
+                    sizes="(max-width: 768px) 50vw, 160px"
+                    className="object-cover"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-1 border-t border-line px-2 py-1.5">
+                  <span className="truncate text-[11px] text-ink-muted">
+                    {image.colorId
+                      ? colors.find((c) => c.id === image.colorId)?.name ?? "Colour"
+                      : "Shared"}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {image.fileId && (
+                      <span className="rounded bg-brand-50 px-1 py-0.5 text-[9.5px] font-medium text-brand-700">
+                        IK
+                      </span>
+                    )}
+                    {image.isMain && <Badge variant="brand">Main</Badge>}
+                  </div>
+                </div>
+                <div className="absolute inset-x-0 top-0 flex items-center justify-between bg-navy-900/70 px-1.5 py-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="flex gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onMoveImage(image.id, -1)}
+                      className="rounded p-1 text-white hover:bg-white/15"
+                      aria-label="Move image earlier"
+                    >
+                      <GripVertical className="h-3.5 w-3.5 rotate-90" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onMoveImage(image.id, 1)}
+                      className="rounded p-1 text-white hover:bg-white/15"
+                      aria-label="Move image later"
+                    >
+                      <GripVertical className="h-3.5 w-3.5 -rotate-90" />
+                    </button>
+                  </div>
+                  <div className="flex gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onSetMainImage(image.id)}
+                      className="rounded p-1 text-white hover:bg-white/15"
+                      aria-label="Set as main image"
+                    >
+                      <Star className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveImage(image.id)}
+                      className="rounded p-1 text-white hover:bg-white/15"
+                      aria-label="Remove image"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <span className="absolute left-1.5 top-1.5 rounded bg-navy-900/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                  {index + 1}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="rounded-lg border border-line bg-surface-muted/50 p-3.5">
+          <Label htmlFor="imageUrl">Add image by URL</Label>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Input
+              id="imageUrl"
+              value={imageUrl}
+              onChange={(e) => onSetImageUrl(e.target.value)}
+              placeholder="https://… or /products/…"
+              className="h-9 min-w-[220px] flex-1"
+            />
+            <Select value={imageColor} onValueChange={onSetImageColor}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="shared">Shared (all colours)</SelectItem>
+                {colors.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onAddImage(imageUrl, imageColor === "shared" ? null : imageColor)}
+            >
+              <Plus className="h-4 w-4" />
+              Add image
+            </Button>
+          </div>
+
+          <p className="mt-3 text-[11.5px] font-medium uppercase tracking-wider text-ink-muted">
+            Mock library
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {IMAGE_LIBRARY.map((src) => (
+              <button
+                key={src}
+                type="button"
+                onClick={() => onAddImage(src, imageColor === "shared" ? null : imageColor)}
+                className="relative h-14 w-14 overflow-hidden rounded-md border border-line transition-transform hover:scale-105"
+                title={src}
+              >
+                <Image src={src} alt={src} fill sizes="56px" className="object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
+interface VariantMatrixProps {
+  variants: ProductVariant[];
+  colors: ProductColor[];
+  sizes: string[];
+  variantError: string | null;
+  onToggleSize: (size: string) => void;
+  onGenerateVariants: () => void;
+  onOpenManual: () => void;
+  onUpdateVariant: (variantId: string, patch: Partial<ProductVariant>) => void;
+  onDeleteVariant: (variant: ProductVariant) => void;
+}
+
+const VariantMatrix = React.memo(function VariantMatrix({
+  variants,
+  colors,
+  sizes,
+  variantError,
+  onToggleSize,
+  onGenerateVariants,
+  onOpenManual,
+  onUpdateVariant,
+  onDeleteVariant,
+}: VariantMatrixProps) {
+  const prices = variants.map((v) => v.price).filter((p) => p > 0);
+  const priceRange = prices.length
+    ? { min: Math.min(...prices), max: Math.max(...prices) }
+    : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-3">
+        <div>
+          <h2 className="text-[15px] font-semibold text-ink">Variants</h2>
+          <p className="text-[12.5px] text-ink-muted">
+            Generate from colours × sizes, then fine-tune pricing and stock inline.
+          </p>
+        </div>
+        <Badge variant="brand">
+          <Layers className="h-3 w-3" />
+          {variants.length} variant{variants.length === 1 ? "" : "s"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-line bg-surface-muted/50 p-3.5">
+            <Label>Available sizes</Label>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {[...APPAREL_SIZES, ...SHOE_SIZES, ONE_SIZE].map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => onToggleSize(size)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
+                    sizes.includes(size)
+                      ? "border-brand-500 bg-brand-50 text-brand-700"
+                      : "border-line-strong bg-surface text-ink-muted hover:text-ink-soft",
+                  )}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+            <FieldHint>Selected: {sizes.length ? sizes.join(", ") : "none yet"}</FieldHint>
+          </div>
+
+          <div className="flex flex-col justify-between gap-3 rounded-lg border border-line bg-surface-muted/50 p-3.5">
+            <div>
+              <Label>Generate variants</Label>
+              <p className="mt-1 text-[12px] text-ink-muted">
+                Creates one variant per colour and size. Values you have already edited are
+                preserved.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={onGenerateVariants}>
+                <Wand2 className="h-4 w-4" />
+                {variants.length ? "Regenerate variants" : "Generate variants"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onOpenManual}
+                disabled={colors.length === 0}
+              >
+                <Plus className="h-4 w-4" />
+                Add manually
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {variantError && (
+          <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2.5 text-[12.5px] text-rose-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            {variantError}
+          </div>
+        )}
+
+        {variants.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-line-strong bg-surface-muted/50 px-4 py-8 text-center">
+            <Layers className="mx-auto h-5 w-5 text-ink-muted" />
+            <p className="mt-2 text-[13px] font-medium text-ink">No variants yet</p>
+            <p className="text-[12px] text-ink-muted">
+              Choose sizes and press “Generate variants” to build sellable combinations.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-line">
+            <div className="max-h-[420px] overflow-auto scrollbar-thin">
+              <table className="w-full min-w-[900px] border-collapse text-[12.5px]">
+                <thead className="sticky top-0 z-10 bg-surface-muted">
+                  <tr className="text-left">
+                    <th className="border-b border-line px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Colour
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Size
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      SKU
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Price
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Compare
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Stock
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Reorder
+                    </th>
+                    <th className="border-b border-line px-3 py-2 text-center text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
+                      Active
+                    </th>
+                    <th className="border-b border-line px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {variants.map((variant) => (
+                    <tr key={variant.id} className="border-b border-line last:border-0 hover:bg-surface-muted/60">
+                      <td className="px-3 py-1.5">
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="h-4 w-4 shrink-0 rounded-full border border-line-strong"
+                            style={{ backgroundColor: variant.colorHex }}
+                          />
+                          <span className="truncate text-[12.5px] text-ink">{variant.colorName}</span>
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <Input
+                          value={variant.size}
+                          onChange={(e) =>
+                            onUpdateVariant(variant.id, {
+                              size: e.target.value,
+                              name: `${variant.colorName} / ${e.target.value}`,
+                            })
+                          }
+                          className="h-7 w-20 px-2 text-[12px]"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <Input
+                          value={variant.sku}
+                          onChange={(e) => onUpdateVariant(variant.id, { sku: e.target.value })}
+                          className="h-7 w-40 px-2 font-mono text-[11.5px]"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={variant.price}
+                          onChange={(e) =>
+                            onUpdateVariant(variant.id, { price: Number(e.target.value) })
+                          }
+                          className="h-7 w-24 px-2 text-right text-[12.5px] tabular"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={variant.compareAtPrice ?? ""}
+                          placeholder="—"
+                          onChange={(e) =>
+                            onUpdateVariant(variant.id, {
+                              compareAtPrice: e.target.value === "" ? null : Number(e.target.value),
+                            })
+                          }
+                          className="h-7 w-24 px-2 text-right text-[12.5px] tabular"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={variant.stock}
+                          onChange={(e) =>
+                            onUpdateVariant(variant.id, { stock: Number(e.target.value) })
+                          }
+                          className="h-7 w-20 px-2 text-right text-[12.5px] tabular"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={variant.reorderLevel}
+                          onChange={(e) =>
+                            onUpdateVariant(variant.id, { reorderLevel: Number(e.target.value) })
+                          }
+                          className="h-7 w-20 px-2 text-right text-[12.5px] tabular"
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-center">
+                        <Switch
+                          checked={variant.active}
+                          onCheckedChange={(checked) =>
+                            onUpdateVariant(variant.id, { active: checked })
+                          }
+                          aria-label={`Toggle ${variant.name}`}
+                        />
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => onDeleteVariant(variant)}
+                          aria-label={`Remove ${variant.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-surface-muted/60 px-3 py-2 text-[12px] text-ink-muted">
+              <span>
+                {variants.length} variants · {variants.filter((v) => v.active).length} active ·
+                total stock {variants.reduce((s, v) => s + v.stock, 0)}
+              </span>
+              <span>
+                {priceRange
+                  ? priceRange.min === priceRange.max
+                    ? formatPKR(priceRange.min)
+                    : `${formatPKR(priceRange.min)} – ${formatPKR(priceRange.max)}`
+                  : "Set variant pricing"}
+              </span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+});
+
 interface ProductFormProps {
   id?: string;
   initialProduct?: Product;
@@ -117,6 +721,7 @@ export default function ProductFormPage({
   const id = propId ?? (routeParams?.id as string | undefined);
   const router = useRouter();
   const { toast } = useToast();
+  const canWrite = useCan("product:write");
   const isEdit = Boolean(id);
 
   const existing = initialProduct;
@@ -160,7 +765,13 @@ export default function ProductFormPage({
   });
 
   const { register, handleSubmit, setValue, watch, trigger, formState } = form;
-  const values = watch();
+  const nameValue = watch("name");
+  const slugValue = watch("slug");
+  const categoryIdValue = watch("categoryId");
+  const genderValue = watch("gender");
+  const statusValue = watch("status");
+  const engraveableValue = watch("engraveable");
+  const featuredValue = watch("featured");
   const slugField = register("slug");
 
   useEffect(() => {
@@ -184,7 +795,6 @@ export default function ProductFormPage({
   }, [existing?.id]);
 
   // Auto-generate the slug from the product name until the user edits it.
-  const nameValue = watch("name");
   const lastAutoSlug = useRef("");
   useEffect(() => {
     if (slugTouched) return;
@@ -197,7 +807,7 @@ export default function ProductFormPage({
 
   const leafCategories = categories.filter((c) => c.parentId || c.status === "active");
 
-  const addColor = () => {
+  const addColor = useCallback(() => {
     const name = colorDraft.name.trim();
     if (!name) {
       toast({ title: "Colour name required", variant: "error" });
@@ -210,9 +820,9 @@ export default function ProductFormPage({
     setColors((prev) => [...prev, { id: uid("col"), name, hex: colorDraft.hex }]);
     setColorDraft({ name: "", hex: "#0F766E" });
     toast({ title: "Colour added", description: `${name} is available for variants.` });
-  };
+  }, [colorDraft, colors, toast]);
 
-  const updateColor = (colorId: string, patch: Partial<ProductColor>) => {
+  const updateColor = useCallback((colorId: string, patch: Partial<ProductColor>) => {
     setColors((prev) =>
       prev.map((c) => (c.id === colorId ? { ...c, ...patch } : c)),
     );
@@ -227,20 +837,20 @@ export default function ProductFormPage({
           : v,
       ),
     );
-  };
+  }, []);
 
-  const removeColor = (colorId: string) => {
+  const removeColor = useCallback((colorId: string) => {
     setColors((prev) => prev.filter((c) => c.id !== colorId));
     setImages((prev) => prev.map((i) => (i.colorId === colorId ? { ...i, colorId: null } : i)));
     setVariants((prev) => prev.filter((v) => v.colorId !== colorId));
     toast({ title: "Colour removed", description: "Related variants were deleted.", variant: "info" });
-  };
+  }, [toast]);
 
-  const toggleSize = (size: string) => {
+  const toggleSize = useCallback((size: string) => {
     setSizes((prev) => (prev.includes(size) ? prev.filter((s) => s !== size) : [...prev, size]));
-  };
+  }, []);
 
-  const generateVariants = () => {
+  const generateVariants = useCallback(() => {
     if (colors.length === 0) {
       toast({ title: "Add at least one colour", variant: "error" });
       return;
@@ -285,11 +895,14 @@ export default function ProductFormPage({
       title: "Variants generated",
       description: `${colors.length} colour${colors.length === 1 ? "" : "s"} × ${sizes.length} size${sizes.length === 1 ? "" : "s"} — existing edits preserved.`,
     });
-  };
+  }, [colors, sizes, slugPrefix, toast]);
 
-  const updateVariant = (variantId: string, patch: Partial<ProductVariant>) => {
+  const updateVariant = useCallback((variantId: string, patch: Partial<ProductVariant>) => {
     setVariants((prev) => prev.map((v) => (v.id === variantId ? { ...v, ...patch } : v)));
-  };
+  }, []);
+
+  const openManualModal = useCallback(() => setManualOpen(true), []);
+  const openDeleteVariantModal = useCallback((variant: ProductVariant) => setDeleteVariant(variant), []);
 
   const addManualVariant = (data: {
     colorId: string;
@@ -323,34 +936,36 @@ export default function ProductFormPage({
     toast({ title: "Variant added", description: `${variant.name} added to the product.` });
   };
 
-  const addImage = (url: string, colorId: string | null, fileId?: string) => {
+  const addImage = useCallback((url: string, colorId: string | null, fileId?: string) => {
     const trimmed = url.trim();
     if (!trimmed) return;
+    const prodName = form.getValues("name");
     const image: ProductImage = {
       id: uid("img"),
       url: trimmed,
       fileId,
-      alt: `${values.name || "Product"} image`,
+      alt: `${prodName || "Product"} image`,
       colorId,
-      isMain: images.length === 0,
+      isMain: false,
     };
     setImages((prev) => {
-      const next = [...prev, image];
+      const next = [...prev, { ...image, isMain: prev.length === 0 }];
       return next.map((i, index) => (index === 0 ? { ...i, isMain: true } : i));
     });
     setImageUrl("");
     toast({ title: "Image added" });
-  };
+  }, [form, toast]);
 
-  const addUploadedMedia = (mediaList: UploadedMedia | UploadedMedia[]) => {
+  const addUploadedMedia = useCallback((mediaList: UploadedMedia | UploadedMedia[]) => {
     const list = Array.isArray(mediaList) ? mediaList : [mediaList];
     if (list.length === 0) return;
+    const prodName = form.getValues("name");
     setImages((prev) => {
       const newItems: ProductImage[] = list.map((media) => ({
         id: uid("img"),
         url: media.url,
         fileId: media.fileId,
-        alt: media.name || `${values.name || "Product"} image`,
+        alt: media.name || `${prodName || "Product"} image`,
         colorId:
           media.colorId !== undefined
             ? media.colorId
@@ -366,9 +981,9 @@ export default function ProductFormPage({
       title: `${list.length} image${list.length === 1 ? "" : "s"} added`,
       description: "Uploaded to ImageKit successfully.",
     });
-  };
+  }, [form, imageColor, toast]);
 
-  const moveImage = (imageId: string, direction: -1 | 1) => {
+  const moveImage = useCallback((imageId: string, direction: -1 | 1) => {
     setImages((prev) => {
       const index = prev.findIndex((i) => i.id === imageId);
       const target = index + direction;
@@ -377,44 +992,41 @@ export default function ProductFormPage({
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
-  };
+  }, []);
 
-  const setMainImage = (imageId: string) => {
+  const setMainImage = useCallback((imageId: string) => {
     setImages((prev) => prev.map((i) => ({ ...i, isMain: i.id === imageId })));
-  };
+  }, []);
 
-  const removeImage = (imageId: string) => {
-    const target = images.find((i) => i.id === imageId);
+  const removeImage = useCallback((imageId: string) => {
     setImages((prev) => {
       const next = prev.filter((i) => i.id !== imageId);
       if (next.length && !next.some((i) => i.isMain)) next[0] = { ...next[0], isMain: true };
       return next;
     });
-    if (target?.fileId) {
-      deleteMediaAction(target.fileId).catch((err) => {
-        console.warn("[Failed to delete ImageKit asset]:", err);
-      });
-    }
-  };
+  }, []);
 
-  const buildProduct = (status: Product["status"]): Product => ({
-    id: existing?.id ?? uid("prd"),
-    name: values.name.trim(),
-    slug: values.slug.trim(),
-    description: values.description.trim(),
-    categoryId: values.categoryId,
-    brand: values.brand.trim(),
-    gender: values.gender,
-    material: values.material.trim(),
-    status,
-    engraveable: values.engraveable,
-    featured: values.featured,
-    colors,
-    images,
-    variants,
-    createdAt: existing?.createdAt ?? new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
+  const buildProduct = (status: Product["status"]): Product => {
+    const vals = form.getValues();
+    return {
+      id: existing?.id ?? uid("prd"),
+      name: vals.name.trim(),
+      slug: vals.slug.trim(),
+      description: vals.description.trim(),
+      categoryId: vals.categoryId,
+      brand: vals.brand.trim(),
+      gender: vals.gender,
+      material: vals.material.trim(),
+      status,
+      engraveable: vals.engraveable,
+      featured: vals.featured,
+      colors,
+      images,
+      variants,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  };
 
   const validateVariants = () => {
     if (variants.length === 0) {
@@ -455,6 +1067,8 @@ export default function ProductFormPage({
       return;
     }
 
+    const values = form.getValues();
+
     try {
       if (isEdit && existing) {
         const res = await updateProductAction({
@@ -475,6 +1089,7 @@ export default function ProductFormPage({
             sortOrder: idx,
           })),
           variants: variants.map((v) => ({
+            id: v.id && !v.id.startsWith("var-") ? v.id : undefined,
             name: v.name,
             sku: v.sku,
             size: v.size,
@@ -483,12 +1098,16 @@ export default function ProductFormPage({
             stock: v.stock,
             reorderLevel: v.reorderLevel,
             isActive: v.active,
-            colorName: v.colorName,
+            colorId: v.colorId && !v.colorId.startsWith("col-") ? v.colorId : undefined,
+            colorName: v.colorName || colors.find((c) => c.id === v.colorId)?.name || undefined,
           })),
           images: images.map((img, idx) => ({
-            imagekitFileId: img.fileId || `img-${idx}-${Date.now().toString(36)}`,
+            id: img.id && !img.id.startsWith("img-") ? img.id : undefined,
+            imagekitFileId: img.fileId || null,
             url: img.url,
             altText: img.alt || values.name,
+            colorId: img.colorId && !img.colorId.startsWith("col-") ? img.colorId : undefined,
+            colorName: colors.find((c) => c.id === img.colorId)?.name || undefined,
             sortOrder: idx,
           })),
         });
@@ -525,6 +1144,7 @@ export default function ProductFormPage({
             sortOrder: idx,
           })),
           variants: variants.map((v) => ({
+            id: v.id && !v.id.startsWith("var-") ? v.id : undefined,
             name: v.name,
             sku: v.sku,
             size: v.size,
@@ -533,12 +1153,16 @@ export default function ProductFormPage({
             stock: v.stock,
             reorderLevel: v.reorderLevel,
             isActive: v.active,
-            colorName: v.colorName,
+            colorId: v.colorId && !v.colorId.startsWith("col-") ? v.colorId : undefined,
+            colorName: v.colorName || colors.find((c) => c.id === v.colorId)?.name || undefined,
           })),
           images: images.map((img, idx) => ({
-            imagekitFileId: img.fileId || `img-${idx}-${Date.now().toString(36)}`,
+            id: img.id && !img.id.startsWith("img-") ? img.id : undefined,
+            imagekitFileId: img.fileId || null,
             url: img.url,
             altText: img.alt || values.name,
+            colorId: img.colorId && !img.colorId.startsWith("col-") ? img.colorId : undefined,
+            colorName: colors.find((c) => c.id === img.colorId)?.name || undefined,
             sortOrder: idx,
           })),
         });
@@ -577,7 +1201,7 @@ export default function ProductFormPage({
 
   return (
     <form
-      onSubmit={handleSubmit(() => onSubmit(values.status))}
+      onSubmit={handleSubmit(() => onSubmit(statusValue))}
       className="space-y-5"
       onError={() =>
         toast({
@@ -599,14 +1223,18 @@ export default function ProductFormPage({
                 Back to products
               </Link>
             </Button>
-            <Button type="button" variant="outline" onClick={() => onSubmit("draft")}>
-              <Save className="h-4 w-4" />
-              Save as draft
-            </Button>
-            <Button type="button" onClick={() => onSubmit("active")}>
-              <Check className="h-4 w-4" />
-              Publish
-            </Button>
+            {canWrite && (
+              <>
+                <Button type="button" variant="outline" onClick={() => onSubmit("draft")}>
+                  <Save className="h-4 w-4" />
+                  Save as draft
+                </Button>
+                <Button type="button" onClick={() => onSubmit("active")}>
+                  <Check className="h-4 w-4" />
+                  Publish
+                </Button>
+              </>
+            )}
           </>
         }
       />
@@ -654,7 +1282,7 @@ export default function ProductFormPage({
                         className="ml-auto text-[11.5px] font-medium text-brand-700 hover:underline"
                         onClick={() => {
                           setSlugTouched(false);
-                          setValue("slug", slugify(values.name ?? ""));
+                          setValue("slug", slugify(form.getValues("name") ?? ""));
                         }}
                       >
                         Regenerate from name
@@ -689,7 +1317,7 @@ export default function ProductFormPage({
                 <div>
                   <Label>Category</Label>
                   <Select
-                    value={values.categoryId}
+                    value={categoryIdValue}
                     onValueChange={(value) => setValue("categoryId", value, { shouldValidate: true })}
                   >
                     <SelectTrigger aria-invalid={Boolean(formState.errors.categoryId)}>
@@ -728,7 +1356,7 @@ export default function ProductFormPage({
                 <div>
                   <Label>Gender</Label>
                   <Select
-                    value={values.gender}
+                    value={genderValue}
                     onValueChange={(value) => setValue("gender", value as BasicsForm["gender"])}
                   >
                     <SelectTrigger>
@@ -757,7 +1385,7 @@ export default function ProductFormPage({
                 <div>
                   <Label>Status</Label>
                   <Select
-                    value={values.status}
+                    value={statusValue}
                     onValueChange={(value) => setValue("status", value as Product["status"])}
                   >
                     <SelectTrigger>
@@ -784,7 +1412,7 @@ export default function ProductFormPage({
                   </div>
                 </div>
                 <Switch
-                  checked={values.engraveable}
+                  checked={engraveableValue}
                   onCheckedChange={(checked) => setValue("engraveable", checked)}
                   aria-label="Toggle engravable"
                 />
@@ -801,7 +1429,7 @@ export default function ProductFormPage({
                   </div>
                 </div>
                 <Switch
-                  checked={values.featured}
+                  checked={featuredValue}
                   onCheckedChange={(checked) => setValue("featured", checked)}
                   aria-label="Toggle featured"
                 />
@@ -810,526 +1438,44 @@ export default function ProductFormPage({
           </Card>
 
           {/* ---------------------------------------------------- colours */}
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-3">
-              <div>
-                <h2 className="text-[15px] font-semibold text-ink">Colours</h2>
-                <p className="text-[12.5px] text-ink-muted">
-                  Each colour can carry its own images and generates its own variants.
-                </p>
-              </div>
-              <Badge variant="brand">
-                <Palette className="h-3 w-3" />
-                {colors.length} colour{colors.length === 1 ? "" : "s"}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {colors.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-line-strong bg-surface-muted/50 px-4 py-8 text-center">
-                  <Palette className="mx-auto h-5 w-5 text-ink-muted" />
-                  <p className="mt-2 text-[13px] font-medium text-ink">No colours yet</p>
-                  <p className="text-[12px] text-ink-muted">
-                    Add a colour to unlock colour-specific images and variants.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {colors.map((color) => (
-                    <div
-                      key={color.id}
-                      className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-surface px-3 py-2.5"
-                    >
-                      <span
-                        className="h-7 w-7 shrink-0 rounded-full border border-line-strong"
-                        style={{ backgroundColor: color.hex }}
-                      />
-                      {editingColorId === color.id ? (
-                        <>
-                          <Input
-                            defaultValue={color.name}
-                            className="h-8 w-44"
-                            onBlur={(e) => {
-                              updateColor(color.id, { name: e.target.value });
-                              setEditingColorId(null);
-                            }}
-                          />
-                          <input
-                            type="color"
-                            value={color.hex}
-                            className="h-8 w-10 cursor-pointer rounded border border-line-strong bg-surface p-0.5"
-                            onChange={(e) => updateColor(color.id, { hex: e.target.value })}
-                          />
-                          <Button type="button" size="sm" variant="ghost" onClick={() => setEditingColorId(null)}>
-                            Done
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[13px] font-medium text-ink">{color.name}</p>
-                            <p className="font-mono text-[11.5px] text-ink-muted">{color.hex}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setEditingColorId(color.id)}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="ghost"
-                            onClick={() => removeColor(color.id)}
-                            aria-label={`Remove ${color.name}`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-rose-600" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+          <ColorEditor
+            colors={colors}
+            editingColorId={editingColorId}
+            colorDraft={colorDraft}
+            onSetEditingColorId={setEditingColorId}
+            onUpdateColor={updateColor}
+            onRemoveColor={removeColor}
+            onSetColorDraft={setColorDraft}
+            onAddColor={addColor}
+          />
 
-              <div className="rounded-lg border border-line bg-surface-muted/50 p-3.5">
-                <Label htmlFor="colorName">Add a colour</Label>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Input
-                    id="colorName"
-                    value={colorDraft.name}
-                    onChange={(e) => setColorDraft((prev) => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g. Peacock Teal"
-                    className="h-9 w-52"
-                  />
-                  <input
-                    type="color"
-                    aria-label="Pick colour"
-                    value={colorDraft.hex}
-                    onChange={(e) => setColorDraft((prev) => ({ ...prev, hex: e.target.value }))}
-                    className="h-9 w-12 cursor-pointer rounded-md border border-line-strong bg-surface p-1"
-                  />
-                  <Button type="button" variant="outline" onClick={addColor}>
-                    <Plus className="h-4 w-4" />
-                    Add colour
-                  </Button>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11.5px] text-ink-muted">Quick picks:</span>
-                  {COLOR_LIBRARY.slice(0, 10).map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      title={preset.name}
-                      onClick={() => setColorDraft((prev) => ({ ...prev, name: preset.name, hex: preset.hex }))}
-                      className="h-6 w-6 rounded-full border border-line-strong transition-transform hover:scale-110"
-                      style={{ backgroundColor: preset.hex }}
-                    />
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* ----------------------------------------------------- images */}
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-3">
-              <div>
-                <h2 className="text-[15px] font-semibold text-ink">Product images</h2>
-                <p className="text-[12.5px] text-ink-muted">
-                  Shared images are used when no colour is selected; colour images override them.
-                </p>
-              </div>
-              <Badge variant="navy">
-                <ImagePlus className="h-3 w-3" />
-                {images.length} image{images.length === 1 ? "" : "s"}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <ImageUpload
-                folder="/scrubx/products"
-                multiple={true}
-                colorOptions={colors}
-                selectedColorId={imageColor === "shared" ? null : imageColor}
-                onColorChange={(cId) => setImageColor(cId ?? "shared")}
-                onUploadSuccess={addUploadedMedia}
-                helperText="Upload product photos directly to ImageKit CDN."
-              />
-
-              {images.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-line-strong bg-surface-muted/50 px-4 py-8 text-center">
-                  <ImagePlus className="mx-auto h-5 w-5 text-ink-muted" />
-                  <p className="mt-2 text-[13px] font-medium text-ink">No images uploaded</p>
-                  <p className="text-[12px] text-ink-muted">
-                    Upload photos above, add an image URL below, or pick one from the mock library.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                  {images.map((image, index) => (
-                    <div
-                      key={image.id}
-                      className={cn(
-                        "group relative overflow-hidden rounded-lg border bg-surface",
-                        image.isMain ? "border-brand-400 ring-2 ring-brand-100" : "border-line",
-                      )}
-                    >
-                      <div className="relative aspect-square w-full overflow-hidden bg-surface-muted">
-                        <Image
-                          src={image.url}
-                          alt={image.alt}
-                          fill
-                          sizes="(max-width: 768px) 50vw, 160px"
-                          className="object-cover"
-                        />
-                      </div>
-                      <div className="flex items-center justify-between gap-1 border-t border-line px-2 py-1.5">
-                        <span className="truncate text-[11px] text-ink-muted">
-                          {image.colorId
-                            ? colors.find((c) => c.id === image.colorId)?.name ?? "Colour"
-                            : "Shared"}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          {image.fileId && (
-                            <span className="rounded bg-brand-50 px-1 py-0.5 text-[9.5px] font-medium text-brand-700">
-                              IK
-                            </span>
-                          )}
-                          {image.isMain && <Badge variant="brand">Main</Badge>}
-                        </div>
-                      </div>
-                      <div className="absolute inset-x-0 top-0 flex items-center justify-between bg-navy-900/70 px-1.5 py-1 opacity-0 transition-opacity group-hover:opacity-100">
-                        <div className="flex gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => moveImage(image.id, -1)}
-                            className="rounded p-1 text-white hover:bg-white/15"
-                            aria-label="Move image earlier"
-                          >
-                            <GripVertical className="h-3.5 w-3.5 rotate-90" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => moveImage(image.id, 1)}
-                            className="rounded p-1 text-white hover:bg-white/15"
-                            aria-label="Move image later"
-                          >
-                            <GripVertical className="h-3.5 w-3.5 -rotate-90" />
-                          </button>
-                        </div>
-                        <div className="flex gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => setMainImage(image.id)}
-                            className="rounded p-1 text-white hover:bg-white/15"
-                            aria-label="Set as main image"
-                          >
-                            <Star className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => removeImage(image.id)}
-                            className="rounded p-1 text-white hover:bg-white/15"
-                            aria-label="Remove image"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                      <span className="absolute left-1.5 top-1.5 rounded bg-navy-900/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
-                        {index + 1}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="rounded-lg border border-line bg-surface-muted/50 p-3.5">
-                <Label htmlFor="imageUrl">Add image by URL</Label>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Input
-                    id="imageUrl"
-                    value={imageUrl}
-                    onChange={(e) => setImageUrl(e.target.value)}
-                    placeholder="https://… or /products/…"
-                    className="h-9 min-w-[220px] flex-1"
-                  />
-                  <Select value={imageColor} onValueChange={setImageColor}>
-                    <SelectTrigger className="w-[170px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="shared">Shared (all colours)</SelectItem>
-                      {colors.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => addImage(imageUrl, imageColor === "shared" ? null : imageColor)}
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add image
-                  </Button>
-                </div>
-
-                <p className="mt-3 text-[11.5px] font-medium uppercase tracking-wider text-ink-muted">
-                  Mock library
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {IMAGE_LIBRARY.map((src) => (
-                    <button
-                      key={src}
-                      type="button"
-                      onClick={() => addImage(src, imageColor === "shared" ? null : imageColor)}
-                      className="relative h-14 w-14 overflow-hidden rounded-md border border-line transition-transform hover:scale-105"
-                      title={src}
-                    >
-                      <Image src={src} alt={src} fill sizes="56px" className="object-cover" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          {/* ---------------------------------------------------- images */}
+          <ImagePanel
+            images={images}
+            colors={colors}
+            imageColor={imageColor}
+            imageUrl={imageUrl}
+            onSetImageUrl={setImageUrl}
+            onSetImageColor={setImageColor}
+            onAddImage={addImage}
+            onAddUploadedMedia={addUploadedMedia}
+            onMoveImage={moveImage}
+            onRemoveImage={removeImage}
+            onSetMainImage={setMainImage}
+          />
 
           {/* ---------------------------------------------------- variants */}
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-3">
-              <div>
-                <h2 className="text-[15px] font-semibold text-ink">Variants</h2>
-                <p className="text-[12.5px] text-ink-muted">
-                  Generate from colours × sizes, then fine-tune pricing and stock inline.
-                </p>
-              </div>
-              <Badge variant="brand">
-                <Layers className="h-3 w-3" />
-                {variants.length} variant{variants.length === 1 ? "" : "s"}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-lg border border-line bg-surface-muted/50 p-3.5">
-                  <Label>Available sizes</Label>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {[...APPAREL_SIZES, ...SHOE_SIZES, ONE_SIZE].map((size) => (
-                      <button
-                        key={size}
-                        type="button"
-                        onClick={() => toggleSize(size)}
-                        className={cn(
-                          "rounded-md border px-2.5 py-1 text-[12px] font-medium transition-colors",
-                          sizes.includes(size)
-                            ? "border-brand-500 bg-brand-50 text-brand-700"
-                            : "border-line-strong bg-surface text-ink-muted hover:text-ink-soft",
-                        )}
-                      >
-                        {size}
-                      </button>
-                    ))}
-                  </div>
-                  <FieldHint>Selected: {sizes.length ? sizes.join(", ") : "none yet"}</FieldHint>
-                </div>
-
-                <div className="flex flex-col justify-between gap-3 rounded-lg border border-line bg-surface-muted/50 p-3.5">
-                  <div>
-                    <Label>Generate variants</Label>
-                    <p className="mt-1 text-[12px] text-ink-muted">
-                      Creates one variant per colour and size. Values you have already edited are
-                      preserved.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" onClick={generateVariants}>
-                      <Wand2 className="h-4 w-4" />
-                      {variants.length ? "Regenerate variants" : "Generate variants"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => setManualOpen(true)}
-                      disabled={colors.length === 0}
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add manually
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {variantError && (
-                <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2.5 text-[12.5px] text-rose-700">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  {variantError}
-                </div>
-              )}
-
-              {variants.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-line-strong bg-surface-muted/50 px-4 py-8 text-center">
-                  <Layers className="mx-auto h-5 w-5 text-ink-muted" />
-                  <p className="mt-2 text-[13px] font-medium text-ink">No variants yet</p>
-                  <p className="text-[12px] text-ink-muted">
-                    Choose sizes and press “Generate variants” to build sellable combinations.
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-hidden rounded-lg border border-line">
-                  <div className="max-h-[420px] overflow-auto scrollbar-thin">
-                    <table className="w-full min-w-[900px] border-collapse text-[12.5px]">
-                      <thead className="sticky top-0 z-10 bg-surface-muted">
-                        <tr className="text-left">
-                          <th className="border-b border-line px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Colour
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Size
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            SKU
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Price
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Compare
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Stock
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-right text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Reorder
-                          </th>
-                          <th className="border-b border-line px-3 py-2 text-center text-[10.5px] font-semibold uppercase tracking-wider text-ink-muted">
-                            Active
-                          </th>
-                          <th className="border-b border-line px-3 py-2" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {variants.map((variant) => (
-                          <tr key={variant.id} className="border-b border-line last:border-0 hover:bg-surface-muted/60">
-                            <td className="px-3 py-1.5">
-                              <span className="flex items-center gap-2">
-                                <span
-                                  className="h-4 w-4 shrink-0 rounded-full border border-line-strong"
-                                  style={{ backgroundColor: variant.colorHex }}
-                                />
-                                <span className="truncate text-[12.5px] text-ink">{variant.colorName}</span>
-                              </span>
-                            </td>
-                            <td className="px-3 py-1.5">
-                              <Input
-                                value={variant.size}
-                                onChange={(e) =>
-                                  updateVariant(variant.id, {
-                                    size: e.target.value,
-                                    name: `${variant.colorName} / ${e.target.value}`,
-                                  })
-                                }
-                                className="h-7 w-20 px-2 text-[12px]"
-                              />
-                            </td>
-                            <td className="px-3 py-1.5">
-                              <Input
-                                value={variant.sku}
-                                onChange={(e) => updateVariant(variant.id, { sku: e.target.value })}
-                                className="h-7 w-40 px-2 font-mono text-[11.5px]"
-                              />
-                            </td>
-                            <td className="px-3 py-1.5 text-right">
-                              <Input
-                                type="number"
-                                min={0}
-                                value={variant.price}
-                                onChange={(e) =>
-                                  updateVariant(variant.id, { price: Number(e.target.value) })
-                                }
-                                className="h-7 w-24 px-2 text-right text-[12.5px] tabular"
-                              />
-                            </td>
-                            <td className="px-3 py-1.5 text-right">
-                              <Input
-                                type="number"
-                                min={0}
-                                value={variant.compareAtPrice ?? ""}
-                                placeholder="—"
-                                onChange={(e) =>
-                                  updateVariant(variant.id, {
-                                    compareAtPrice: e.target.value === "" ? null : Number(e.target.value),
-                                  })
-                                }
-                                className="h-7 w-24 px-2 text-right text-[12.5px] tabular"
-                              />
-                            </td>
-                            <td className="px-3 py-1.5 text-right">
-                              <Input
-                                type="number"
-                                min={0}
-                                value={variant.stock}
-                                onChange={(e) =>
-                                  updateVariant(variant.id, { stock: Number(e.target.value) })
-                                }
-                                className="h-7 w-20 px-2 text-right text-[12.5px] tabular"
-                              />
-                            </td>
-                            <td className="px-3 py-1.5 text-right">
-                              <Input
-                                type="number"
-                                min={0}
-                                value={variant.reorderLevel}
-                                onChange={(e) =>
-                                  updateVariant(variant.id, { reorderLevel: Number(e.target.value) })
-                                }
-                                className="h-7 w-20 px-2 text-right text-[12.5px] tabular"
-                              />
-                            </td>
-                            <td className="px-3 py-1.5 text-center">
-                              <Switch
-                                checked={variant.active}
-                                onCheckedChange={(checked) =>
-                                  updateVariant(variant.id, { active: checked })
-                                }
-                                aria-label={`Toggle ${variant.name}`}
-                              />
-                            </td>
-                            <td className="px-3 py-1.5 text-right">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                onClick={() => setDeleteVariant(variant)}
-                                aria-label={`Remove ${variant.name}`}
-                              >
-                                <Trash2 className="h-3.5 w-3.5 text-rose-600" />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-surface-muted/60 px-3 py-2 text-[12px] text-ink-muted">
-                    <span>
-                      {variants.length} variants · {variants.filter((v) => v.active).length} active ·
-                      total stock {variants.reduce((s, v) => s + v.stock, 0)}
-                    </span>
-                    <span>
-                      {priceRange
-                        ? priceRange.min === priceRange.max
-                          ? formatPKR(priceRange.min)
-                          : `${formatPKR(priceRange.min)} – ${formatPKR(priceRange.max)}`
-                        : "Set variant pricing"}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <VariantMatrix
+            variants={variants}
+            colors={colors}
+            sizes={sizes}
+            variantError={variantError}
+            onToggleSize={toggleSize}
+            onGenerateVariants={generateVariants}
+            onOpenManual={openManualModal}
+            onUpdateVariant={updateVariant}
+            onDeleteVariant={openDeleteVariantModal}
+          />
         </div>
 
         {/* ------------------------------------------------------- preview */}
@@ -1359,11 +1505,11 @@ export default function ProductFormPage({
                 <div className="space-y-2 p-3.5">
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-[13.5px] font-semibold leading-snug text-ink">
-                      {values.name || "Untitled product"}
+                      {nameValue || "Untitled product"}
                     </p>
-                    <ProductStatusBadge status={values.status} />
+                    <ProductStatusBadge status={statusValue} />
                   </div>
-                  <p className="font-mono text-[11px] text-ink-muted">/{values.slug || "product-slug"}</p>
+                  <p className="font-mono text-[11px] text-ink-muted">/{slugValue || "product-slug"}</p>
                   {priceRange ? (
                     <p className="text-[15px] font-semibold text-ink tabular">
                       {priceRange.min === priceRange.max
@@ -1399,8 +1545,8 @@ export default function ProductFormPage({
                     </div>
                   )}
                   <div className="flex flex-wrap gap-1.5 pt-1">
-                    {values.engraveable && <Badge variant="purple">Engravable</Badge>}
-                    {values.featured && <Badge variant="warning">Featured</Badge>}
+                    {engraveableValue && <Badge variant="purple">Engravable</Badge>}
+                    {featuredValue && <Badge variant="warning">Featured</Badge>}
                     <Badge variant="neutral">{totalStock} in stock</Badge>
                     <Badge variant="neutral">{variants.length} variants</Badge>
                   </div>

@@ -380,17 +380,20 @@ async function runOrdersCustomersPaymentsTests() {
     assert(Boolean(order1Payment?.id), "Initial pending payment record generated");
     assert(order1Payment.status === "pending", "Payment initial status is 'pending'");
 
+    const txRef1 = `SCB-TX-998877-${timestamp}`;
+    const txRef2 = `SCB-TX-VERIFIED-${timestamp}`;
+
     // 4.1 Customer submits screenshot proof & TID
     const submittedPayment = await paymentService.submitPaymentProof({
       paymentId: order1Payment.id,
       senderName: "Dr. Ayesha Khan",
       senderAccountLast4: "9876",
-      transactionReference: "SCB-TX-998877",
+      transactionReference: txRef1,
       proofUrl: "https://ik.imagekit.io/scrubx/payment-proofs/receipt-01.jpg",
       imagekitFileId: "ik_file_proof_01",
     });
     assert(submittedPayment.status === "awaiting_verification", "Payment status updated to 'awaiting_verification'");
-    assert(submittedPayment.transactionReference === "SCB-TX-998877", "Transaction reference recorded");
+    assert(submittedPayment.transactionReference === txRef1, "Transaction reference recorded");
 
     const orderAfterSubmit = await orderService.getOrderById(order1.id, superAdmin);
     assert(orderAfterSubmit.status === "payment_submitted", "Order status advanced to 'payment_submitted'");
@@ -426,7 +429,7 @@ async function runOrdersCustomersPaymentsTests() {
     await paymentService.submitPaymentProof({
       paymentId: order1Payment.id,
       senderName: "Dr. Ayesha Khan",
-      transactionReference: "SCB-TX-VERIFIED-100",
+      transactionReference: txRef2,
       proofUrl: "https://ik.imagekit.io/scrubx/payment-proofs/receipt-clear.jpg",
       imagekitFileId: "ik_file_proof_clear",
     });
@@ -484,30 +487,38 @@ async function runOrdersCustomersPaymentsTests() {
     );
     assert(processingOrder.status === "processing", "Order status transitioned to 'processing'");
 
-    // 6.2 Shipping: update courier & markShipped
-    const shippedOrder = await orderService.updateOrderShipping(
+    // 6.2 Shipping: update order status to shipped + update courier details (BUG-006)
+    const shippedOrder = await orderService.updateOrderStatus(
+      {
+        orderId: order1.id,
+        status: "shipped",
+        note: "Dispatched via TCS Express",
+      },
+      superAdmin
+    );
+    assert(shippedOrder.status === "shipped", "Order status updated to 'shipped'");
+
+    const shippingInfo = await orderService.updateOrderShipping(
       {
         orderId: order1.id,
         courier: "TCS Express",
         trackingNumber: "TCS-9911223344",
-        markShipped: true,
       },
-      staffAdmin
+      superAdmin
     );
-    assert(shippedOrder.status === "shipped", "Order status updated to 'shipped'");
-    assert(Boolean(shippedOrder.shippedAt), "shippedAt timestamp recorded");
-    assert(shippedOrder.courier === "TCS Express", "Courier recorded as TCS Express");
+    assert(shippingInfo.courier === "TCS Express", "Courier recorded as TCS Express");
+    assert(shippingInfo.trackingNumber === "TCS-9911223344", "Tracking number recorded");
 
-    // 6.3 Delivery
-    const deliveredOrder = await orderService.updateOrderShipping(
+    // 6.3 Delivery: update order status to delivered (BUG-006)
+    const deliveredOrder = await orderService.updateOrderStatus(
       {
         orderId: order1.id,
-        markDelivered: true,
+        status: "delivered",
+        note: "Customer confirmed delivery",
       },
-      staffAdmin
+      superAdmin
     );
     assert(deliveredOrder.status === "delivered", "Order status updated to 'delivered'");
-    assert(Boolean(deliveredOrder.deliveredAt), "deliveredAt timestamp recorded");
 
     // 6.4 Illegal status transition rejection (delivered -> pending)
     let illegalTransitionBlocked = false;
@@ -611,7 +622,9 @@ async function runOrdersCustomersPaymentsTests() {
     const refundedPayment = await paymentService.refundPayment(
       {
         paymentId: order1Payment.id,
+        refundAmount: Number(order1Payment.amount),
         reason: "Customer size exchange refund processed via bank transfer.",
+        restock: false,
       },
       superAdmin
     );
@@ -645,7 +658,12 @@ async function runOrdersCustomersPaymentsTests() {
     let staffRefundBlocked = false;
     try {
       await paymentService.refundPayment(
-        { paymentId: orderB.payments[0].id, reason: "Unauthorized" },
+        {
+          paymentId: orderB.payments[0].id,
+          refundAmount: 100,
+          reason: "Unauthorized",
+          restock: false,
+        },
         staffAdmin
       );
     } catch (err) {

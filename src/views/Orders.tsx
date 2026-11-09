@@ -16,6 +16,7 @@ import {
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
+import { Checkbox } from "../components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -50,15 +51,28 @@ import { ORDER_STATUS_LABEL, PAYMENT_METHOD_LABEL } from "../lib/constants";
 import { formatDate, formatPKR } from "../lib/format";
 import { cn } from "../lib/utils";
 import type { Order, OrderStatus, PaymentMethodId, PaymentStatus } from "../lib/types";
-import { updateOrderStatusAction } from "../actions/orders";
+import { updateOrderStatusAction, bulkUpdateOrderStatusAction } from "../actions/orders";
 
 type SortKey = "newest" | "oldest" | "total-desc" | "total-asc";
 
 interface OrdersProps {
   initialOrders?: Order[];
+  initialPagination?: {
+    totalItems: number;
+    totalPages: number;
+    currentPage: number;
+    limit: number;
+  };
+  initialQuery?: string;
+  deliveredThisMonthCount?: number;
 }
 
-export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
+export default function OrdersPage({
+  initialOrders = [],
+  initialPagination,
+  initialQuery = "",
+  deliveredThisMonthCount,
+}: OrdersProps) {
   const router = useRouter();
   const { toast } = useToast();
   const [orders, setOrders] = useState<Order[]>(initialOrders);
@@ -67,13 +81,82 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
     setOrders(initialOrders);
   }, [initialOrders]);
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
+  const handleSearchSubmit = () => {
+    const q = query.trim();
+    router.replace(q ? `/orders?q=${encodeURIComponent(q)}` : "/orders");
+  };
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+
   const [status, setStatus] = useState<"all" | OrderStatus>("all");
   const [paymentStatus, setPaymentStatus] = useState<"all" | PaymentStatus>("all");
   const [method, setMethod] = useState<"all" | PaymentMethodId>("all");
   const [sort, setSort] = useState<SortKey>("newest");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  const toggleSelectOrder = (id: string) => {
+    setSelectedOrderIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = (visibleItems: Order[]) => {
+    const allSelected = visibleItems.length > 0 && visibleItems.every((o) => selectedOrderIds.includes(o.id));
+    setSelectedOrderIds(allSelected ? [] : [...new Set([...selectedOrderIds, ...visibleItems.map((o) => o.id)])]);
+  };
+
+  const handleBulkStatus = async (newStatus: OrderStatus) => {
+    if (selectedOrderIds.length === 0 || isBulkUpdating) return;
+    setIsBulkUpdating(true);
+    try {
+      const res = await bulkUpdateOrderStatusAction({
+        orderIds: selectedOrderIds.slice(0, 50),
+        status: newStatus as any,
+      });
+
+      if (res.success && res.data) {
+        const { succeeded, failed } = res.data;
+        if (succeeded.length > 0) {
+          toast({
+            title: `Bulk update complete`,
+            description: `${succeeded.length} order(s) updated to ${ORDER_STATUS_LABEL[newStatus] || newStatus}.${
+              failed.length > 0 ? ` ${failed.length} failed.` : ""
+            }`,
+          });
+        }
+        if (failed.length > 0) {
+          toast({
+            title: `${failed.length} order(s) could not transition`,
+            description: failed[0]?.error || "Invalid status transition.",
+            variant: "error",
+          });
+        }
+        setSelectedOrderIds([]);
+        router.refresh();
+      } else {
+        toast({
+          title: "Bulk update failed",
+          description: res.error || "Failed to update orders.",
+          variant: "error",
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Error in bulk update",
+        description: err.message,
+        variant: "error",
+      });
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -195,7 +278,7 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
         description="Review inbound orders, manage payment proofs and push shipments out for delivery."
         actions={
           <Badge variant="neutral">
-            PKR {orders.filter((o) => o.status === "delivered").length} delivered this month
+            {deliveredThisMonthCount !== undefined ? deliveredThisMonthCount : orders.filter((o) => o.status === "delivered").length} delivered this month
           </Badge>
         }
       />
@@ -235,6 +318,7 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
                 setQuery(value);
                 setPage(1);
               }}
+              onSubmit={handleSearchSubmit}
               placeholder="Search by order #, customer, phone, item…"
               className="w-full lg:max-w-xs"
             />
@@ -294,6 +378,8 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
                   <SelectItem value="bank">Bank Transfer</SelectItem>
                   <SelectItem value="jazzcash">JazzCash</SelectItem>
                   <SelectItem value="easypaisa">Easypaisa</SelectItem>
+                  <SelectItem value="sadapay">SadaPay</SelectItem>
+                  <SelectItem value="nayapay">NayaPay</SelectItem>
                   <SelectItem value="cod">Cash on Delivery</SelectItem>
                 </SelectContent>
               </Select>
@@ -313,6 +399,37 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
                 </SelectContent>
               </Select>
             </div>
+
+            {selectedOrderIds.length > 0 && (
+              <div className="flex items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 shadow-2xs ml-auto">
+                <span className="text-xs font-semibold text-brand-800">
+                  {selectedOrderIds.length} selected
+                </span>
+                <div className="h-4 w-px bg-brand-200" />
+                <Select
+                  onValueChange={(val) => handleBulkStatus(val as OrderStatus)}
+                  disabled={isBulkUpdating}
+                >
+                  <SelectTrigger className="h-7 w-36 text-xs bg-white">
+                    <SelectValue placeholder="Advance status…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="processing">Mark Processing</SelectItem>
+                    <SelectItem value="shipped">Mark Shipped</SelectItem>
+                    <SelectItem value="delivered">Mark Delivered</SelectItem>
+                    <SelectItem value="cancelled">Cancel Selected</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSelectedOrderIds([])}
+                  className="h-7 text-xs text-ink-muted hover:text-ink px-2"
+                >
+                  Deselect
+                </Button>
+              </div>
+            )}
           </div>
 
           {visible.length === 0 ? (
@@ -340,6 +457,13 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={visible.length > 0 && visible.every((o) => selectedOrderIds.includes(o.id))}
+                        onCheckedChange={() => toggleSelectAll(visible)}
+                        aria-label="Select all visible orders"
+                      />
+                    </TableHead>
                     <TableHead>Order</TableHead>
                     <TableHead>Customer</TableHead>
                     <TableHead>Date</TableHead>
@@ -353,6 +477,13 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
                 <TableBody>
                   {visible.map((order) => (
                     <TableRow key={order.id}>
+                      <TableCell className="w-10">
+                        <Checkbox
+                          checked={selectedOrderIds.includes(order.id)}
+                          onCheckedChange={() => toggleSelectOrder(order.id)}
+                          aria-label={`Select order ${order.orderNumber}`}
+                        />
+                      </TableCell>
                       <TableCell>
                         <Link
                           href={`/orders/${order.id}`}
@@ -380,7 +511,7 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
                       </TableCell>
                       <TableCell className="whitespace-nowrap">{formatDate(order.date)}</TableCell>
                       <TableCell className="text-right tabular">
-                        {order.items.reduce((sum, i) => sum + i.quantity, 0)}
+                        {order.itemsCount ?? order.items.reduce((sum, i) => sum + i.quantity, 0)}
                       </TableCell>
                       <TableCell className="text-right font-medium text-ink tabular">
                         {formatPKR(order.total)}
@@ -423,13 +554,21 @@ export default function OrdersPage({ initialOrders = [] }: OrdersProps) {
                 </TableBody>
               </Table>
               <Pagination
-                page={safePage}
-                pageSize={pageSize}
-                total={filtered.length}
-                onPageChange={setPage}
+                page={initialPagination ? initialPagination.currentPage : safePage}
+                pageSize={initialPagination ? initialPagination.limit : pageSize}
+                total={initialPagination ? initialPagination.totalItems : filtered.length}
+                onPageChange={(newPage) => {
+                  setPage(newPage);
+                  if (initialPagination) {
+                    router.push(`?page=${newPage}&limit=${pageSize}`);
+                  }
+                }}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
                   setPage(1);
+                  if (initialPagination) {
+                    router.push(`?page=1&limit=${size}`);
+                  }
                 }}
               />
             </>

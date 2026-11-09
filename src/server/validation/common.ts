@@ -110,6 +110,36 @@ export const dateRangeSchema = z
 export type DateRangeInput = z.infer<typeof dateRangeSchema>;
 
 /**
+ * Allowed Image MIME Types (SEC-006: strictly raster formats only; SVG excluded to prevent stored XSS)
+ */
+export const allowedImageMimeTypesSchema = z.enum(
+  [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/avif",
+  ],
+  {
+    message: "Unsupported file MIME type. Allowed formats: JPEG, PNG, WebP, AVIF.",
+  }
+);
+
+/**
+ * Valid ImageKit storage destination folders
+ */
+export const imageFolderSchema = z.enum(
+  [
+    "/scrubx/products",
+    "/scrubx/categories",
+    "/scrubx/engraving-logos",
+    "/scrubx/payment-proofs",
+  ],
+  {
+    message: "Invalid destination storage folder.",
+  }
+);
+
+/**
  * Uploaded Media Metadata Validation Schema
  */
 export const fileUploadMetaSchema = z.object({
@@ -124,29 +154,8 @@ export const fileUploadMetaSchema = z.object({
     .int()
     .min(1, "File size must be greater than 0 bytes.")
     .max(5 * 1024 * 1024, "File size cannot exceed the 5MB maximum limit."),
-  mimeType: z.enum(
-    [
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-      "image/avif",
-      "image/svg+xml",
-    ],
-    {
-      message: "Unsupported file MIME type. Allowed: JPEG, PNG, WebP, AVIF, SVG.",
-    }
-  ),
-  folder: z.enum(
-    [
-      "/scrubx/products",
-      "/scrubx/categories",
-      "/scrubx/engraving-logos",
-      "/scrubx/payment-proofs",
-    ],
-    {
-      message: "Invalid destination storage folder.",
-    }
-  ),
+  mimeType: allowedImageMimeTypesSchema,
+  folder: imageFolderSchema,
 });
 
 export type FileUploadMetaInput = z.infer<typeof fileUploadMetaSchema>;

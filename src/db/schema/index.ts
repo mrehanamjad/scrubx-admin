@@ -18,5 +18,8 @@ export * from "./payment-methods.ts";
 export * from "./orders.ts";
 export * from "./payments.ts";
 export * from "./settings.ts";
+export * from "./audit.ts";
+export * from "./media.ts";
+export * from "./notifications.ts";
 export * from "./relations.ts";
 export * from "./types.ts";

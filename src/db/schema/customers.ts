@@ -5,7 +5,9 @@ import {
   timestamp,
   uuid,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { baUser } from "./auth.ts";
 
 /**
@@ -16,17 +18,23 @@ import { baUser } from "./auth.ts";
  * Security: RLS is enabled with zero direct public access.
  */
 
-export const customers = pgTable("customers", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: text("user_id").references(() => baUser.id, { onDelete: "set null" }).unique(),
-  email: text("email").notNull().unique(),
-  firstName: text("first_name"),
-  lastName: text("last_name"),
-  phone: text("phone"),
-  notes: text("notes"), // Internal admin notes
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const customers = pgTable(
+  "customers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").references(() => baUser.id, { onDelete: "set null" }).unique(),
+    email: text("email").notNull(),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    phone: text("phone"),
+    notes: text("notes"), // Internal admin notes
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_customers_email_normalized").on(sql`lower(trim(${table.email}))`),
+  ]
+);
 
 export const addresses = pgTable(
   "addresses",
@@ -49,4 +57,26 @@ export const addresses = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("idx_addresses_customer_id").on(table.customerId)]
+);
+
+export const customerNotes = pgTable(
+  "customer_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: uuid("customer_id")
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    createdBy: text("created_by").references(() => baUser.id, { onDelete: "set null" }),
+    isPinned: boolean("is_pinned").notNull().default(false),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: text("deleted_by").references(() => baUser.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_customer_notes_customer_created").on(table.customerId, table.createdAt),
+    index("idx_customer_notes_active_pinned")
+      .on(table.customerId, table.isPinned, table.createdAt)
+      .where(sql`deleted_at IS NULL`),
+  ]
 );

@@ -9,7 +9,7 @@ import {
 } from "./catalog.ts";
 import { inventory, inventoryMovements } from "./inventory.ts";
 import { engravingOptions } from "./engraving.ts";
-import { customers, addresses } from "./customers.ts";
+import { customers, addresses, customerNotes } from "./customers.ts";
 import { shippingMethods } from "./shipping.ts";
 import { coupons } from "./coupons.ts";
 import { paymentMethods } from "./payment-methods.ts";
@@ -148,6 +148,18 @@ export const customersRelations = relations(customers, ({ one, many }) => ({
   }),
   addresses: many(addresses),
   orders: many(orders),
+  notes: many(customerNotes),
+}));
+
+export const customerNotesRelations = relations(customerNotes, ({ one }) => ({
+  customer: one(customers, {
+    fields: [customerNotes.customerId],
+    references: [customers.id],
+  }),
+  author: one(baUser, {
+    fields: [customerNotes.createdBy],
+    references: [baUser.id],
+  }),
 }));
 
 export const addressesRelations = relations(addresses, ({ one }) => ({

@@ -8,7 +8,7 @@ import type {
 } from "./catalog.ts";
 import type { inventory, inventoryMovements } from "./inventory.ts";
 import type { engravingOptions } from "./engraving.ts";
-import type { customers, addresses } from "./customers.ts";
+import type { customers, addresses, customerNotes } from "./customers.ts";
 import type { shippingMethods } from "./shipping.ts";
 import type { coupons } from "./coupons.ts";
 import type { paymentMethods } from "./payment-methods.ts";
@@ -19,9 +19,14 @@ import type {
   orderCoupons,
   orderNotes,
   orderStatusHistory,
+  orderReturns,
+  orderReturnItems,
 } from "./orders.ts";
 import type { payments } from "./payments.ts";
 import type { storeSettings } from "./settings.ts";
+import type { auditLogs } from "./audit.ts";
+import type { mediaUploads } from "./media.ts";
+import type { notificationReads } from "./notifications.ts";
 
 // Re-export JSON types and Enums
 export type * from "./json-types.ts";
@@ -74,6 +79,9 @@ export type NewCustomer = typeof customers.$inferInsert;
 export type Address = typeof addresses.$inferSelect;
 export type NewAddress = typeof addresses.$inferInsert;
 
+export type CustomerNote = typeof customerNotes.$inferSelect;
+export type NewCustomerNote = typeof customerNotes.$inferInsert;
+
 // 6. Shipping Types
 export type ShippingMethod = typeof shippingMethods.$inferSelect;
 export type NewShippingMethod = typeof shippingMethods.$inferInsert;
@@ -116,3 +124,22 @@ export type NewPayment = typeof payments.$inferInsert;
 // 11. Store Settings Types
 export type StoreSetting = typeof storeSettings.$inferSelect;
 export type NewStoreSetting = typeof storeSettings.$inferInsert;
+
+// 12. Audit Log Types
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type NewAuditLog = typeof auditLogs.$inferInsert;
+
+// 13. Returns & Exchange Types (ECOM-002, ECOM-003)
+export type OrderReturn = typeof orderReturns.$inferSelect;
+export type NewOrderReturn = typeof orderReturns.$inferInsert;
+
+export type OrderReturnItem = typeof orderReturnItems.$inferSelect;
+export type NewOrderReturnItem = typeof orderReturnItems.$inferInsert;
+
+// 14. Media Upload Tracking Types (ECOM-008)
+export type MediaUpload = typeof mediaUploads.$inferSelect;
+export type NewMediaUpload = typeof mediaUploads.$inferInsert;
+
+// 15. Notification Read Types (ECOM-011)
+export type NotificationRead = typeof notificationReads.$inferSelect;
+export type NewNotificationRead = typeof notificationReads.$inferInsert;

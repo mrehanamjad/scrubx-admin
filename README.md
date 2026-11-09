@@ -4,11 +4,14 @@ Admin dashboard and store management platform for ScrubX Pakistan medical appare
 
 ## Tech Stack
 
-- **Framework**: Next.js 16 (Turbopack, App Router)
+- **Framework**: Next.js 16 (Turbopack, App Router, React Server Components)
 - **UI Library**: React 19
 - **Styling**: Tailwind CSS v4 with PostCSS
 - **Components & Icons**: Radix UI, Lucide React
-- **Data & Charts**: Recharts, Context API with localStorage persistence
+- **Database & ORM**: PostgreSQL 17 (Supabase Managed), Drizzle ORM
+- **Authentication**: Better Auth with RBAC (`super_admin`, `admin`, `staff`)
+- **Media**: ImageKit direct client upload & server SDK
+- **Data & Charts**: Recharts, Server Actions (`createSafeAction`), Zod validation
 - **Typography**: `next/font/google` (Inter, Plus Jakarta Sans, JetBrains Mono)
 
 ## Getting Started

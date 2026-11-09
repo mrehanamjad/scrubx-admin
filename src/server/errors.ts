@@ -168,6 +168,14 @@ export function toActionError(error: unknown): SerializedActionError {
         code: "TRIGGER_POLICY_VIOLATION",
       };
     }
+
+    // 40P01: Deadlock detected, 40001: Serialization failure (BUG-004)
+    if (pgCode === "40P01" || pgCode === "40001") {
+      return {
+        error: "The system was busy processing a concurrent change. Please retry.",
+        code: "CONFLICT",
+      };
+    }
   }
 
   // 4. Fallback for generic or unhandled errors

@@ -55,6 +55,28 @@ export function relativeTime(iso: string) {
   return `${Math.round(months / 12)}y ago`;
 }
 
+export function formatRelativeTime(input: string | Date): string {
+  try {
+    const then = typeof input === "string" ? new Date(input).getTime() : input.getTime();
+    if (isNaN(then)) return "";
+    const diff = Date.now() - then;
+    const diffInSeconds = Math.round(diff / 1000);
+    const diffInMinutes = Math.round(diffInSeconds / 60);
+    const diffInHours = Math.round(diffInMinutes / 60);
+    const diffInDays = Math.round(diffInHours / 24);
+
+    const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+    if (Math.abs(diffInSeconds) < 60) return "just now";
+    if (Math.abs(diffInMinutes) < 60) return rtf.format(-diffInMinutes, "minute");
+    if (Math.abs(diffInHours) < 24) return rtf.format(-diffInHours, "hour");
+    if (Math.abs(diffInDays) < 30) return rtf.format(-diffInDays, "day");
+    return formatDate(typeof input === "string" ? input : input.toISOString());
+  } catch {
+    return relativeTime(typeof input === "string" ? input : input.toISOString());
+  }
+}
+
 export function daysAgo(days: number, hour = 11, minute = 30) {
   const d = new Date();
   d.setHours(hour, minute, 0, 0);

@@ -7,11 +7,15 @@ export function SearchInput({
   onChange,
   placeholder = "Search…",
   className,
+  onKeyDown,
+  onSubmit,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  onSubmit?: () => void;
 }) {
   return (
     <div className={cn("relative", className)}>
@@ -19,6 +23,13 @@ export function SearchInput({
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          onKeyDown?.(e);
+          if (e.key === "Enter" && onSubmit) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
         placeholder={placeholder}
         className="pl-9"
       />

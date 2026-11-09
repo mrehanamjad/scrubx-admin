@@ -24,6 +24,7 @@ interface AuthParameters {
   token: string;
   expire: number;
   signature: string;
+  folder?: string;
 }
 
 /**
@@ -33,10 +34,18 @@ export async function uploadToImageKit(
   file: File,
   options: UploadOptions = {}
 ): Promise<UploadedFileResult> {
+  // SEC-006: Defence in depth: reject SVG before requesting signature
+  if (file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg")) {
+    throw new Error("SVG uploads are disabled for security. Allowed formats: JPEG, PNG, WebP, AVIF.");
+  }
+
   const folder = options.folder || "/scrubx/products";
 
-  // 1. Fetch short-lived auth signature from server
-  const authRes = await fetch("/api/upload/auth", {
+  // 1. Fetch short-lived auth signature from server with folder capability binding (SEC-005)
+  const authUrl = new URL("/api/upload/auth", window.location.origin);
+  authUrl.searchParams.set("folder", folder);
+
+  const authRes = await fetch(authUrl.toString(), {
     method: "GET",
     headers: { "Cache-Control": "no-cache" },
     signal: options.signal,
@@ -50,6 +59,7 @@ export async function uploadToImageKit(
   }
 
   const authParams: AuthParameters = await authRes.json();
+  const targetFolder = authParams.folder || folder;
   const publicKey = process.env.NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY;
 
   if (!publicKey) {
@@ -70,7 +80,7 @@ export async function uploadToImageKit(
   formData.append("signature", authParams.signature);
   formData.append("expire", authParams.expire.toString());
   formData.append("token", authParams.token);
-  formData.append("folder", folder);
+  formData.append("folder", targetFolder);
   formData.append("useUniqueFileName", "true");
 
   if (options.tags && options.tags.length > 0) {
